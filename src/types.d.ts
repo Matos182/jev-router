@@ -556,7 +556,7 @@ export interface RouterOptions {
   env?: Env;
   /** Receives every log entry. Defaults to one JSON line per entry on stdout. */
   log?: (entry: LogEntry) => void;
-  /** Used for Jev calls only; upstream requests always use the global `fetch`. */
+  /** Used for Jev calls only; upstream requests always use the global `fetch`. Without it, loopback Jev channels skip any proxy. */
   fetchImpl?: FetchLike;
   /** A session store to use instead of one built from the config. */
   store?: SessionStore;

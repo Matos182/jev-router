@@ -1,6 +1,7 @@
 // The router's addresses as clients see them, and the /healthz probe that tells a jev-router from
 // anything else on a port.
 import http from 'node:http';
+import https from 'node:https';
 import net from 'node:net';
 import { hasControlCharacter } from './files.mjs';
 
@@ -64,6 +65,47 @@ export const urlHost = (host) => (host.includes(':') ? `[${host}]` : host);
 export const clientHost = (host) => (host === '0.0.0.0' || host === '::' ? LOOPBACK : urlHost(host));
 /** @param {string} host */
 export const isLoopback = (host) => ['127.0.0.1', 'localhost', '::1'].includes(host);
+
+/**
+ * A fetch for loopback servers that never goes through a proxy. With NODE_USE_ENV_PROXY=1 the
+ * global fetch sends every request to HTTP_PROXY unless NO_PROXY names the host, and a loopback
+ * System One call carries the conversation's routing state. It reads the whole body, follows no
+ * redirect, and rejects the way fetch does: with the signal's reason on abort, and with a
+ * TypeError whose `cause` has the socket error otherwise.
+ * @param {string} url
+ * @param {RequestInit} init
+ * @returns {Promise<Response>}
+ */
+export function directFetch(url, init) {
+  const target = new URL(url);
+  const client = target.protocol === 'https:' ? https : http;
+  const signal = init.signal ?? undefined;
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason);
+      return;
+    }
+    const headers = /** @type {Record<string, string>} */ (init.headers ?? {});
+    const req = client.request(target, { method: init.method ?? 'GET', headers, agent: false, signal }, (res) => {
+      /** @type {Buffer[]} */
+      const chunks = [];
+      res.on('data', (chunk) => chunks.push(chunk));
+      res.on('error', (err) => reject(signal?.aborted ? signal.reason : new TypeError('fetch failed', { cause: err })));
+      res.on('end', () => {
+        /** @type {[string, string][]} */
+        const pairs = [];
+        for (const [name, value] of Object.entries(res.headers))
+          if (value !== undefined) pairs.push([name, Array.isArray(value) ? value.join(', ') : value]);
+        const status = res.statusCode ?? 500;
+        // Response refuses a body on these statuses.
+        const body = [101, 204, 205, 304].includes(status) ? null : Buffer.concat(chunks);
+        resolve(new Response(body, { status, statusText: res.statusMessage, headers: pairs }));
+      });
+    });
+    req.on('error', (err) => reject(signal?.aborted ? signal.reason : new TypeError('fetch failed', { cause: err })));
+    req.end(typeof init.body === 'string' ? init.body : undefined);
+  });
+}
 
 /**
  * @typedef {{ answered: boolean, health?: Health }} Probe

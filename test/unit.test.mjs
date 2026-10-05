@@ -2,6 +2,7 @@
 // the Jev client (against a fake fetch), config validation, session state, usage accounting and the report.
 
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   appendFileSync,
@@ -22,7 +23,7 @@ import { createServer } from 'node:net';
 import { homedir, tmpdir } from 'node:os';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
-import { parseEnv } from 'node:util';
+import { parseEnv, promisify } from 'node:util';
 import { changeSettingsEnv, readSettings, settingsBlock, settingsSet } from '../src/claude.mjs';
 import { loadConfig, validateConfig } from '../src/config.mjs';
 import { envFileFor, loadEnvFile, quoteEnvValue, setEnvValues } from '../src/envfile.mjs';
@@ -48,7 +49,7 @@ import { renderService, startService } from '../src/service.mjs';
 import { hashKey, SessionStore } from '../src/sessions.mjs';
 import { rootProblem } from '../src/setup.mjs';
 import { costOf, UsageTap } from '../src/usage.mjs';
-import { claudeCodeBody, claudeCodeToolTurn, codexBody, jevOptionsAnswer } from './helpers.mjs';
+import { claudeCodeBody, claudeCodeToolTurn, codexBody, jevOptionsAnswer, json, mockServer } from './helpers.mjs';
 
 /** @import { FetchLike, JevConfig, JevState, SessionEntry } from '../src/types.js' */
 
@@ -820,9 +821,9 @@ test('a keyless loopback channel is used, sends no key, and records its model', 
       'tev1',
     );
   }
-  assert.throws(
-    () => validateConfig({ ...shipped, stateFile: null }, { JEV_BASE_URL: 'http://10.1.2.3:11434' }),
-    /JEV_BASE_URL without JEV_API_KEY is only allowed for a loopback address/,
+  assert.ok(
+    validateConfig({ ...shipped, stateFile: null }, { JEV_BASE_URL: 'http://10.1.2.3:11434' }),
+    'a keyless remote JEV_BASE_URL leaves the config valid',
   );
   const remote = new JevClient(JEV, { JEV_BASE_URL: 'http://10.1.2.3:11434' });
   assert.equal(remote.configured, false, 'a keyless non-loopback env channel is not called');
@@ -840,6 +841,45 @@ test('a keyless loopback channel is used, sends no key, and records its model', 
   assert.ok(envCall);
   assert.equal(JSON.parse(String(envCall.init.body)).model, 'nimble');
   assert.equal(/** @type {Record<string, string>} */ (envCall.init.headers).authorization, undefined);
+});
+
+test('a loopback Jev call skips HTTP_PROXY under NODE_USE_ENV_PROXY, which the global fetch does not', async () => {
+  const jev = await mockServer((_call, res) => json(res, 200, jevOptionsAnswer({ option: 'routine', probability: 0.9 })));
+  // The global fetch tunnels through the proxy with CONNECT, even for http.
+  const proxy = await mockServer((_call, res) => json(res, 502, { proxied: true }));
+  /** @type {string[]} */
+  const tunnels = [];
+  proxy.server.on('connect', (req, socket) => {
+    tunnels.push(req.url ?? '');
+    socket.end('HTTP/1.1 502 Bad Gateway\r\n\r\n');
+  });
+  try {
+    const channels = [
+      { name: 'ollama', baseUrl: jev.url, model: 'nimble', timeoutMs: 1000 },
+      { name: 'gateway', baseUrl: jev.url, model: 'jev-1.13.0', keyEnv: 'GATEWAY_KEY', timeoutMs: 1000 },
+    ];
+    const script = `
+      const { JevClient } = await import(${JSON.stringify(new URL('../src/jev.mjs', import.meta.url).href)});
+      const jev = { ...${JSON.stringify(JEV)}, channels: ${JSON.stringify(channels)} };
+      const decisions = [];
+      for (const ch of jev.channels) {
+        const client = new JevClient({ ...jev, channels: [ch] }, { GATEWAY_KEY: 'gateway-key' });
+        decisions.push((await client.decide({ request: 'Add a test', session: { harness: 'Claude Code', depth: 'new session' } })).ok);
+      }
+      const global = await fetch(${JSON.stringify(`${jev.url}/global`)}).then((res) => res.status, (err) => err.message);
+      process.stdout.write(JSON.stringify({ decisions, global }));
+    `;
+    const env = { ...process.env, NODE_USE_ENV_PROXY: '1', HTTP_PROXY: proxy.url, http_proxy: proxy.url, NO_PROXY: '', no_proxy: '' };
+    const { stdout } = await promisify(execFile)(process.execPath, ['--input-type=module', '-e', script], { env, timeout: 10000 });
+    const out = JSON.parse(stdout);
+    assert.equal(out.global, 'fetch failed', 'the global fetch goes through the proxy, which refuses it');
+    assert.deepEqual(out.decisions, [true, true], 'keyless and keyed loopback channels both answer');
+    assert.equal(jev.calls.length, 2, 'both decisions reached the Jev server directly');
+    assert.deepEqual(tunnels, [new URL(jev.url).host], 'the proxy saw only the global fetch, so the setup is live');
+    assert.deepEqual(proxy.calls, [], 'and never a decision');
+  } finally {
+    await Promise.all([jev.close(), proxy.close()]);
+  }
 });
 
 test('a channel threshold overrides the policy for that model only', () => {

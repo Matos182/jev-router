@@ -265,6 +265,24 @@ test('setup --yes takes the keys from the environment, runs a launchd agent, and
   assert.ok(!existsSync(join(empty.config, 'jev-router')), 'nothing was written');
 });
 
+test('setup on a config whose Jev channels are all local asks for no Jev key, with or without --yes', async () => {
+  for (const args of [['--yes'], []]) {
+    const box = await setupBox();
+    mkdirSync(join(box.config, 'jev-router'));
+    const local = JSON.parse(readFileSync(ANTHROPIC_ONLY_CONFIG, 'utf8'));
+    local.jev.channels = [{ name: 'ollama', baseUrl: 'http://127.0.0.1:11434', model: 'nimble' }];
+    writeFileSync(box.configFile, JSON.stringify(local));
+    const result = await setup(box, [...args, '--service', 'none'], { input: '\n' });
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(
+      result.stderr,
+      /^Jev decides which model each message needs\. It runs on ollama at http:\/\/127\.0\.0\.1:11434, which needs no key\.$/m,
+    );
+    assert.doesNotMatch(result.stderr, /API key|Checking the/, `${args.join(' ') || 'interactive'}: no Jev key is asked for or checked`);
+    assert.doesNotMatch(readFileSync(box.envFile, 'utf8'), /API_KEY/);
+  }
+});
+
 test('setup keeps an existing config and a saved key, and a second run restarts the service it installed', async () => {
   const box = await setupBox();
   mkdirSync(join(box.config, 'jev-router'));

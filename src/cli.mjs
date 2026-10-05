@@ -905,6 +905,8 @@ function checkJevKeys(list, cfg, env) {
   if (env.JEV_BASE_URL && env.JEV_API_KEY) list.add('ok', 'jev', 'env: JEV_BASE_URL and JEV_API_KEY are set, so this channel goes first');
   else if (env.JEV_BASE_URL && isLoopbackBaseUrl(env.JEV_BASE_URL))
     list.add('ok', 'jev', `env: JEV_BASE_URL is a local channel, model ${env.JEV_MODEL || 'nimble'}, no key`);
+  else if (env.JEV_BASE_URL)
+    list.add('warn', 'jev', 'env: JEV_BASE_URL is ignored: without JEV_API_KEY it is used only on a loopback address');
   if (!new JevClient(cfg.jev, env).configured) {
     const keys =
       cfg.jev.channels

@@ -295,9 +295,15 @@ test('doctor reports a keyless loopback channel and refuses a keyless one that i
   assert.equal(envOnly.code, 0, envOnly.stdout);
   assert.match(envOnly.stdout, /ok {3}jev {7}env: JEV_BASE_URL is a local channel, model tev1, no key/);
 
-  const envRemote = await run(['doctor'], { ...box.env, JEV_ROUTER_PORT: port, JEV_BASE_URL: 'https://jev.example' });
-  assert.equal(envRemote.code, 1);
-  assert.match(envRemote.stdout, /JEV_BASE_URL without JEV_API_KEY is only allowed for a loopback address/);
+  const envRemote = await run(['doctor'], {
+    ...box.env,
+    JEV_ROUTER_PORT: port,
+    JEV_BASE_URL: 'https://jev.example',
+    TYPESAFE_API_KEY: JEV_KEY,
+  });
+  assert.equal(envRemote.code, 0, envRemote.stdout);
+  assert.match(envRemote.stdout, /warn +jev +env: JEV_BASE_URL is ignored: without JEV_API_KEY it is used only on a loopback address/);
+  assert.doesNotMatch(envRemote.stdout, /Invalid router config/);
 });
 
 test('doctor shows a running router with its version and Jev channels, and spots other servers on the port', async () => {

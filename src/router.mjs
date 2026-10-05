@@ -148,7 +148,7 @@ export function requestKind(headers) {
  */
 export function createRouter(
   input,
-  { env = process.env, log = (entry) => process.stdout.write(`${JSON.stringify(entry)}\n`), fetchImpl = globalThis.fetch, store } = {},
+  { env = process.env, log = (entry) => process.stdout.write(`${JSON.stringify(entry)}\n`), fetchImpl, store } = {},
 ) {
   let cfg = input;
   let jev = new JevClient(cfg.jev, env, { fetchImpl });

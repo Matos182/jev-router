@@ -2,6 +2,7 @@
 // questions it answers, the channels it's reached through, and the policy that turns its
 // probabilities into a tier. Jev's answer is advice; the rules that must hold stay in code.
 import { clip, describeCode, harness, lastAssistantText, recentTools } from './messages.mjs';
+import { directFetch } from './net.mjs';
 import { scrub } from './secrets.mjs';
 
 /**
@@ -307,9 +308,10 @@ export class JevClient {
   /**
    * @param {JevConfig} jev
    * @param {Env} env where the channel keys are read from
-   * @param {{ fetchImpl?: FetchLike }} [options]
+   * @param {{ fetchImpl?: FetchLike }} [options] a fetch for every channel; without one, loopback
+   *   channels skip any proxy and the rest use the global fetch
    */
-  constructor(jev, env, { fetchImpl = globalThis.fetch } = {}) {
+  constructor(jev, env, { fetchImpl } = {}) {
     this.jev = jev;
     this.fetch = fetchImpl;
     /** @type {Map<string, ChannelStats>} */
@@ -406,8 +408,9 @@ export class JevClient {
     const signals = [AbortSignal.timeout(timeoutMs), ...(signal ? [signal] : [])];
     let res;
     let text;
+    const fetchImpl = this.fetch ?? (isLoopbackBaseUrl(ch.baseUrl) ? directFetch : globalThis.fetch);
     try {
-      res = await this.fetch(`${ch.baseUrl.replace(/\/$/, '')}/v1/systemone`, {
+      res = await fetchImpl(`${ch.baseUrl.replace(/\/$/, '')}/v1/systemone`, {
         method: 'POST',
         redirect: 'error',
         signal: AbortSignal.any(signals),

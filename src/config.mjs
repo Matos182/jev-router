@@ -101,12 +101,6 @@ export function validateConfig(input, env = process.env) {
 
   cfg.policy = checkPolicy(cfg.policy, tiers, need);
   cfg.jev = checkJev(cfg.jev, tiers, need);
-  // A keyless JEV_BASE_URL is a local channel. Anywhere else it would send prompts with no key.
-  if (!env.JEV_API_KEY && env.JEV_BASE_URL)
-    need(
-      isLoopbackBaseUrl(env.JEV_BASE_URL),
-      'JEV_BASE_URL without JEV_API_KEY is only allowed for a loopback address (127.0.0.0/8, ::1 or localhost)',
-    );
   checkSurfaces(cfg.surfaces, tiers, need);
   cfg.modelPins ??= {};
   for (const [family, tier] of Object.entries(cfg.modelPins)) need(tiers.has(tier), `modelPins.${family} must be one of tiers`);

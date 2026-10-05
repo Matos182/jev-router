@@ -467,21 +467,26 @@ function leakText({ bases, credentials }) {
  */
 
 /**
- * The keys to save: a Jev key that works, and the keys Claude Code's other tiers need.
+ * The keys to save: a Jev key that works, and the keys Claude Code's other tiers need. A config
+ * whose Jev channels are all local (keyless, on loopback) needs no Jev key.
  * @param {KeyContext} context
  * @returns {Promise<Record<string, string> | undefined>} the variables whose value changes; undefined when the Jev key failed under --yes
  */
 async function collectKeys(context) {
   const { cfg, env, saved } = context;
   if (!cfg.jev.channels.length) throw new Error('the config has no Jev channels (jev.channels), so setup has no key to ask for');
-  if (!cfg.jev.channels.some(hasKeyEnv))
-    throw new Error('the config has no Jev channel with a key (jev.channels[].keyEnv), so setup has no key to ask for');
   const others = upstreamKeys(cfg, 'anthropic');
   if (!context.prompter) keysFromEnvironment(cfg, env, others);
-  const jev = await workingJevKey(context);
-  if (!jev) return undefined;
   /** @type {Record<string, string>} */
-  const keys = { [jev.channel.keyEnv]: jev.value };
+  const keys = {};
+  if (cfg.jev.channels.some(hasKeyEnv)) {
+    const jev = await workingJevKey(context);
+    if (!jev) return undefined;
+    keys[jev.channel.keyEnv] = jev.value;
+  } else {
+    const local = cfg.jev.channels.map((ch) => `${ch.name} at ${ch.baseUrl}`);
+    say(`Jev decides which model each message needs. It runs on ${orWords(local)}, which needs no key.\n`);
+  }
   for (const [name, tiers] of others) keys[name] = await upstreamKey(context, name, tiers);
   return Object.fromEntries(Object.entries(keys).filter(([name, value]) => saved[name] !== value));
 }
@@ -496,7 +501,7 @@ function keysFromEnvironment(cfg, env, others) {
   const missing = [...others].filter(([name]) => !env[name]).map(([name, tiers]) => `${name} for Claude Code's ${inWords(tiers)} tier`);
   const keyed = cfg.jev.channels.filter(hasKeyEnv);
   const jev = keyed.find((ch) => env[ch.keyEnv]);
-  if (!jev) missing.unshift(`${orWords(keyed.map((ch) => ch.keyEnv))} for Jev`);
+  if (keyed.length && !jev) missing.unshift(`${orWords(keyed.map((ch) => ch.keyEnv))} for Jev`);
   if (missing.length) throw new Error(`setup --yes takes the keys from the environment. Set ${inWords(missing)}.`);
   const odd = [...(jev ? [jev.keyEnv] : []), ...others.keys()].filter((name) => oddKey(env[name] ?? ''));
   if (odd.length)
