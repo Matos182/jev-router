@@ -123,6 +123,14 @@ const say = (text) => process.stderr.write(text);
 /** @param {string} name */
 const keyName = (name) => KEY_NAMES[name] ?? name;
 /**
+ * A channel that names a key. A local loopback channel has none, and setup does not ask for one.
+ * @param {JevChannel} channel
+ * @returns {channel is JevChannel & { keyEnv: string }}
+ */
+function hasKeyEnv(channel) {
+  return typeof channel.keyEnv === 'string' && channel.keyEnv !== '';
+}
+/**
  * @param {string[]} items
  * @param {string} [last] the word before the last item
  */
@@ -466,6 +474,8 @@ function leakText({ bases, credentials }) {
 async function collectKeys(context) {
   const { cfg, env, saved } = context;
   if (!cfg.jev.channels.length) throw new Error('the config has no Jev channels (jev.channels), so setup has no key to ask for');
+  if (!cfg.jev.channels.some(hasKeyEnv))
+    throw new Error('the config has no Jev channel with a key (jev.channels[].keyEnv), so setup has no key to ask for');
   const others = upstreamKeys(cfg, 'anthropic');
   if (!context.prompter) keysFromEnvironment(cfg, env, others);
   const jev = await workingJevKey(context);
@@ -484,8 +494,9 @@ async function collectKeys(context) {
  */
 function keysFromEnvironment(cfg, env, others) {
   const missing = [...others].filter(([name]) => !env[name]).map(([name, tiers]) => `${name} for Claude Code's ${inWords(tiers)} tier`);
-  const jev = cfg.jev.channels.find((ch) => env[ch.keyEnv]);
-  if (!jev) missing.unshift(`${orWords(cfg.jev.channels.map((ch) => ch.keyEnv))} for Jev`);
+  const keyed = cfg.jev.channels.filter(hasKeyEnv);
+  const jev = keyed.find((ch) => env[ch.keyEnv]);
+  if (!jev) missing.unshift(`${orWords(keyed.map((ch) => ch.keyEnv))} for Jev`);
   if (missing.length) throw new Error(`setup --yes takes the keys from the environment. Set ${inWords(missing)}.`);
   const odd = [...(jev ? [jev.keyEnv] : []), ...others.keys()].filter((name) => oddKey(env[name] ?? ''));
   if (odd.length)
@@ -523,11 +534,13 @@ function currentKey({ env, saved }, name) {
 /**
  * Asks for a Jev key, or takes it from the environment, and checks it with one Jev call until one works.
  * @param {KeyContext} context
- * @returns {Promise<{ channel: JevChannel, value: string } | undefined>}
+ * @returns {Promise<{ channel: JevChannel & { keyEnv: string }, value: string } | undefined>}
  */
 async function workingJevKey(context) {
   const { cfg, prompter, signal } = context;
-  const places = cfg.jev.channels.map((ch) => `${keyName(ch.keyEnv)}${KEY_PLACES[ch.keyEnv] ? ` (${KEY_PLACES[ch.keyEnv]})` : ''}`);
+  const places = cfg.jev.channels
+    .filter(hasKeyEnv)
+    .map((ch) => `${keyName(ch.keyEnv)}${KEY_PLACES[ch.keyEnv] ? ` (${KEY_PLACES[ch.keyEnv]})` : ''}`);
   say(`Jev decides which model each message needs. It takes a key from ${orWords(places)}; one is enough.\n`);
   for (let retry = false; ; retry = true) {
     const jev = prompter ? await askJevKey(context, prompter, retry) : jevKeyFromEnv(context);
@@ -569,10 +582,10 @@ const keyRefused = (error) => /\bHTTP 40[123]\b/.test(error);
 
 /**
  * @param {KeyContext} context
- * @returns {{ channel: JevChannel, value: string }}
+ * @returns {{ channel: JevChannel & { keyEnv: string }, value: string }}
  */
 function jevKeyFromEnv({ cfg, env }) {
-  const channel = /** @type {JevChannel} */ (cfg.jev.channels.find((ch) => env[ch.keyEnv]));
+  const channel = /** @type {JevChannel & { keyEnv: string }} */ (cfg.jev.channels.filter(hasKeyEnv).find((ch) => env[ch.keyEnv]));
   return { channel, value: /** @type {string} */ (env[channel.keyEnv]) };
 }
 
@@ -582,10 +595,10 @@ function jevKeyFromEnv({ cfg, env }) {
  * @param {KeyContext} context
  * @param {Prompter} prompter
  * @param {boolean} retry
- * @returns {Promise<{ channel: JevChannel, value: string }>}
+ * @returns {Promise<{ channel: JevChannel & { keyEnv: string }, value: string }>}
  */
 async function askJevKey(context, prompter, retry) {
-  const channels = context.cfg.jev.channels;
+  const channels = context.cfg.jev.channels.filter(hasKeyEnv);
   const existing = retry ? undefined : channels.find((ch) => currentKey(context, ch.keyEnv));
   if (existing) {
     const current = /** @type {{ value: string, where: string }} */ (currentKey(context, existing.keyEnv));

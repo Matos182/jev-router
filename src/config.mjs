@@ -3,7 +3,7 @@
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 
-/** @import { Config, Env, JevChannel, JevConfig, Policy, Target } from './types.js' */
+/** @import { ChannelThresholds, Config, Env, JevChannel, JevConfig, Policy, Target } from './types.js' */
 
 /**
  * A config file as parsed: the shape of a Config, with anything possibly missing or wrong.
@@ -101,6 +101,12 @@ export function validateConfig(input, env = process.env) {
 
   cfg.policy = checkPolicy(cfg.policy, tiers, need);
   cfg.jev = checkJev(cfg.jev, tiers, need);
+  // A keyless JEV_BASE_URL is a local channel. Anywhere else it would send prompts with no key.
+  if (!env.JEV_API_KEY && env.JEV_BASE_URL)
+    need(
+      isLoopbackBaseUrl(env.JEV_BASE_URL),
+      'JEV_BASE_URL without JEV_API_KEY is only allowed for a loopback address (127.0.0.0/8, ::1 or localhost)',
+    );
   checkSurfaces(cfg.surfaces, tiers, need);
   cfg.modelPins ??= {};
   for (const [family, tier] of Object.entries(cfg.modelPins)) need(tiers.has(tier), `modelPins.${family} must be one of tiers`);
@@ -172,9 +178,13 @@ function checkJev(input, tiers, need) {
     need(typeof ch.name === 'string' && ch.name, `jev.channels[${i}].name is required`);
     need(isUrl(ch.baseUrl), `jev.channels[${i}].baseUrl must be an http(s) URL`);
     need(typeof ch.model === 'string' && ch.model, `jev.channels[${i}].model is required`);
-    need(typeof ch.keyEnv === 'string' && ch.keyEnv, `jev.channels[${i}].keyEnv is required`);
+    // A loopback channel may omit its key. Any other host must name one, so a prompt is never sent unauthenticated.
+    if (isLoopbackBaseUrl(ch.baseUrl)) {
+      if (ch.keyEnv !== undefined) need(typeof ch.keyEnv === 'string' && ch.keyEnv, `jev.channels[${i}].keyEnv must be a name when set`);
+    } else need(typeof ch.keyEnv === 'string' && ch.keyEnv, keyEnvMessage(i));
     // Anything else fails every Jev call, before it is made.
     need(isCount(ch.timeoutMs, 1), `jev.channels[${i}].timeoutMs must be a whole number of milliseconds above 0`);
+    checkThresholds(ch.thresholds, i, tiers, need);
   }
   need(typeof jev.question === 'string' && jev.question.length > 0, 'jev.question is required');
   need(jev.options && typeof jev.options === 'object' && Object.keys(jev.options).length >= 2, 'jev.options needs at least two options');
@@ -182,6 +192,42 @@ function checkJev(input, tiers, need) {
     need(tiers.has(option?.tier), `jev.options.${name}.tier must be one of tiers`);
   }
   return jev;
+}
+
+/**
+ * @param {number} index
+ */
+function keyEnvMessage(index) {
+  return `jev.channels[${index}].keyEnv is required (a channel without a key is only allowed on a loopback address)`;
+}
+
+/**
+ * `thresholds` on a channel, when present: the same probabilities as the policy, for this model only.
+ * @param {ChannelThresholds | undefined} thresholds
+ * @param {number} index
+ * @param {Set<string>} tiers
+ * @param {Need} need
+ */
+function checkThresholds(thresholds, index, tiers, need) {
+  if (thresholds === undefined) return;
+  const where = `jev.channels[${index}].thresholds`;
+  if (!thresholds || typeof thresholds !== 'object' || Array.isArray(thresholds)) {
+    need(false, `${where} must be an object`);
+    return;
+  }
+  for (const key of Object.keys(thresholds))
+    need(['accept', 'sensitiveOverride', 'claimGuard'].includes(key), `${where}.${key} is not a threshold`);
+  if (thresholds.accept !== undefined) {
+    const accept = thresholds.accept;
+    need(accept && typeof accept === 'object' && !Array.isArray(accept), `${where}.accept must be an object`);
+    for (const [tier, p] of Object.entries(accept ?? {})) {
+      need(tiers.has(tier), `${where}.accept names unknown tier "${tier}"`);
+      need(isProbability(p), `${where}.accept.${tier} must be a probability`);
+    }
+  }
+  if (thresholds.sensitiveOverride !== undefined)
+    need(isProbability(thresholds.sensitiveOverride), `${where}.sensitiveOverride must be a probability`);
+  if (thresholds.claimGuard !== undefined) need(isProbability(thresholds.claimGuard), `${where}.claimGuard must be a probability`);
 }
 
 /**
@@ -265,4 +311,32 @@ function isUrl(value) {
   } catch {
     return false;
   }
+}
+
+/**
+ * A loopback HTTP(S) URL: 127.0.0.0/8, ::1 or localhost. The same rule as `isLoopbackBaseUrl` in
+ * `jev.mjs`. Config can't import it: this module stays on Node built-ins.
+ * @param {unknown} value
+ */
+function isLoopbackBaseUrl(value) {
+  let host;
+  try {
+    const url = new URL(String(value));
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return false;
+    host = url.hostname;
+  } catch {
+    return false;
+  }
+  return loopbackHost(host);
+}
+
+/**
+ * @param {string} hostname
+ */
+function loopbackHost(hostname) {
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  if (host === 'localhost' || host === '::1') return true;
+  const parts = host.split('.');
+  if (parts.length !== 4 || parts[0] !== '127') return false;
+  return parts.every((part) => /^\d{1,3}$/.test(part) && Number(part) <= 255);
 }

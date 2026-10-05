@@ -273,6 +273,33 @@ test('doctor reports config, keys, proxy and router, exits 1 only when routing c
   assert.match(badPort.stdout, /FAIL router {4}port must be a number from 0 to 65535, got "eighty"/);
 });
 
+test('doctor reports a keyless loopback channel and refuses a keyless one that is not loopback', async () => {
+  const box = sandbox();
+  const port = String(await freePort());
+  const local = writeConfig(join(box.root, 'local.json'), {
+    jev: { ...shipped.jev, channels: [{ name: 'ollama', baseUrl: 'http://127.0.0.1:11435', model: 'nimble' }] },
+  });
+  const listed = await run(['doctor', '--config', local], { ...box.env, JEV_ROUTER_PORT: port, TYPESAFE_API_KEY: JEV_KEY });
+  assert.equal(listed.code, 0, listed.stdout);
+  assert.match(listed.stdout, /ok {3}jev {7}ollama: local channel at http:\/\/127\.0\.0\.1:11435, model nimble, no key/);
+  assert.ok(!listed.stdout.includes(JEV_KEY), 'the hosted key is not printed');
+
+  const remote = writeConfig(join(box.root, 'remote.json'), {
+    jev: { ...shipped.jev, channels: [{ name: 'ollama', baseUrl: 'http://10.1.2.3:11434', model: 'nimble' }] },
+  });
+  const refused = await run(['doctor', '--config', remote], { ...box.env, JEV_ROUTER_PORT: port });
+  assert.equal(refused.code, 1);
+  assert.match(refused.stdout, /keyEnv is required \(a channel without a key is only allowed on a loopback address\)/);
+
+  const envOnly = await run(['doctor'], { ...box.env, JEV_ROUTER_PORT: port, JEV_BASE_URL: 'http://127.0.0.1:11435', JEV_MODEL: 'tev1' });
+  assert.equal(envOnly.code, 0, envOnly.stdout);
+  assert.match(envOnly.stdout, /ok {3}jev {7}env: JEV_BASE_URL is a local channel, model tev1, no key/);
+
+  const envRemote = await run(['doctor'], { ...box.env, JEV_ROUTER_PORT: port, JEV_BASE_URL: 'https://jev.example' });
+  assert.equal(envRemote.code, 1);
+  assert.match(envRemote.stdout, /JEV_BASE_URL without JEV_API_KEY is only allowed for a loopback address/);
+});
+
 test('doctor shows a running router with its version and Jev channels, and spots other servers on the port', async () => {
   const box = sandbox();
   const { port } = await runningRouter({ TYPESAFE_API_KEY: JEV_KEY });

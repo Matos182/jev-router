@@ -5,13 +5,14 @@ import { clip, describeCode, harness, lastAssistantText, recentTools } from './m
 import { scrub } from './secrets.mjs';
 
 /**
- * @import { ChannelStats, Env, FetchLike, IncomingHttpHeaders, JevAnswer, JevChannel, JevConfig, JevOption,
- *   JevQuestions, JevState, Policy, PolicyDecision, PolicyInput, RequestBody, SystemOneResponse, Turn } from './types.js'
+ * @import { ChannelStats, ChannelThresholds, Env, FetchLike, IncomingHttpHeaders, JevAnswer, JevChannel, JevConfig,
+ *   JevOption, JevQuestions, JevState, Policy, PolicyDecision, PolicyInput, RequestBody, SystemOneResponse, Turn } from './types.js'
  */
 
 /**
- * A channel with its key read from the environment.
- * @typedef {Omit<JevChannel, 'keyEnv'> & { key: string | undefined }} LiveChannel
+ * A channel with its key read from the environment. `local` channels are loopback and keyless:
+ * nothing in the environment is sent to them.
+ * @typedef {Omit<JevChannel, 'keyEnv'> & { key: string | undefined, local: boolean }} LiveChannel
  */
 
 /**
@@ -145,6 +146,132 @@ export function buildQuestions(jev) {
 /** @type {ReadonlySet<number | undefined>} */
 const RETRYABLE = new Set([408, 429, 500, 502, 503, 504, 529]);
 
+/** Question types Ollama 0.35 documents for `POST /v1/systemone`. Choice and noul are the ones the router asks. */
+const LOCAL_QUESTION_TYPES = new Set(['choice', 'noul', 'score']);
+
+/**
+ * A loopback HTTP(S) URL: 127.0.0.0/8, ::1 or localhost. The same rule as in `config.mjs`.
+ * @param {unknown} value
+ */
+export function isLoopbackBaseUrl(value) {
+  let host;
+  try {
+    const url = new URL(String(value));
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return false;
+    host = url.hostname;
+  } catch {
+    return false;
+  }
+  host = host.toLowerCase().replace(/^\[|\]$/g, '');
+  if (host === 'localhost' || host === '::1') return true;
+  const parts = host.split('.');
+  if (parts.length !== 4 || parts[0] !== '127') return false;
+  return parts.every((part) => /^\d{1,3}$/.test(part) && Number(part) <= 255);
+}
+
+/**
+ * The channels to call, env shortcut first. A keyless channel is kept only on loopback, and its
+ * key stays unset so no configured key is attached to the request.
+ * @param {JevConfig} jev
+ * @param {Env} env
+ * @returns {LiveChannel[]}
+ */
+function liveChannels(jev, env) {
+  /** @type {LiveChannel[]} */
+  const channels = jev.channels.map((ch) => {
+    const local = !ch.keyEnv && isLoopbackBaseUrl(ch.baseUrl);
+    return { ...ch, key: local || !ch.keyEnv ? undefined : env[ch.keyEnv], local };
+  });
+  // JEV_BASE_URL + JEV_API_KEY add a channel in front. That key belongs to this channel; it is never
+  // sent to another host. JEV_BASE_URL alone is a channel only on loopback, and then no key is sent.
+  if (env.JEV_BASE_URL && env.JEV_API_KEY)
+    channels.unshift({
+      name: 'env',
+      baseUrl: env.JEV_BASE_URL,
+      model: env.JEV_MODEL ?? 'jev-1.13.0',
+      key: env.JEV_API_KEY,
+      local: false,
+      timeoutMs: 1200,
+    });
+  else if (env.JEV_BASE_URL && isLoopbackBaseUrl(env.JEV_BASE_URL))
+    channels.unshift({
+      name: 'env',
+      baseUrl: env.JEV_BASE_URL,
+      model: env.JEV_MODEL ?? 'nimble',
+      key: undefined,
+      local: true,
+      timeoutMs: 1200,
+    });
+  return channels.filter((ch) => ch.key || ch.local);
+}
+
+/**
+ * Questions for one call. A local channel only sends types Ollama documents, with each choice
+ * criterion written out as the description string that API requires. An unsupported type fails
+ * the decision, the same way a failed call does: the router keeps the default tier. Never throws.
+ * @param {JevQuestions} questions
+ * @param {boolean} local
+ * @returns {{ ok: true, questions: JevQuestions } | { ok: false, error: string }}
+ */
+export function prepareQuestions(questions, local) {
+  if (!local) return { ok: true, questions };
+  /** @type {string[]} */
+  const unsupported = [];
+  /** @type {Record<string, NonNullable<JevQuestions[keyof JevQuestions]>>} */
+  const prepared = {};
+  for (const [name, question] of Object.entries(questions)) {
+    if (!question || !LOCAL_QUESTION_TYPES.has(question.type)) {
+      unsupported.push(`${name} (${question?.type ?? 'missing'})`);
+      continue;
+    }
+    prepared[name] = flattenQuestion(question);
+  }
+  if (unsupported.length || prepared.tier?.type !== 'choice')
+    return { ok: false, error: `unsupported question type: ${unsupported.join(', ') || 'tier'}` };
+  return { ok: true, questions: /** @type {JevQuestions} */ (/** @type {unknown} */ (prepared)) };
+}
+
+/**
+ * @param {NonNullable<JevQuestions[keyof JevQuestions]>} question
+ * @returns {NonNullable<JevQuestions[keyof JevQuestions]>}
+ */
+function flattenQuestion(question) {
+  if (!question.criteria) return question;
+  if (question.type === 'noul') {
+    return {
+      ...question,
+      criteria: { true: criterionText(question.criteria.true) ?? '', false: criterionText(question.criteria.false) ?? '' },
+    };
+  }
+  return {
+    ...question,
+    criteria: Object.fromEntries(Object.entries(question.criteria).map(([name, value]) => [name, criterionText(value)])),
+  };
+}
+
+/**
+ * One criterion as a description. Ollama rejects the structured object TypeSafe accepts.
+ * @param {unknown} value
+ * @returns {string | null}
+ */
+function criterionText(value) {
+  if (typeof value === 'string') return value;
+  if (value === null || value === undefined) return null;
+  if (Array.isArray(value)) return value.map((item) => (typeof item === 'string' ? item : JSON.stringify(item))).join('; ');
+  if (typeof value !== 'object') return String(value);
+  const rec = /** @type {Record<string, unknown>} */ (value);
+  /** @type {string[]} */
+  const parts = [];
+  if (typeof rec.what === 'string') parts.push(rec.what);
+  if (Array.isArray(rec.examples)) parts.push(`Examples: ${rec.examples.join('; ')}.`);
+  if (typeof rec.not_for === 'string') parts.push(`Not for: ${rec.not_for}`);
+  for (const [key, item] of Object.entries(rec)) {
+    if (key === 'what' || key === 'examples' || key === 'not_for') continue;
+    parts.push(`${key}: ${typeof item === 'string' ? item : JSON.stringify(item)}`);
+  }
+  return parts.join(' ');
+}
+
 /**
  * A failed call's result with the channel's key taken out of its error: an error can quote what was
  * sent, and a server can echo it back.
@@ -171,9 +298,10 @@ export const SAMPLE_STATE = {
 };
 
 /**
- * Talks to one or more System One channels (TypeSafe, OpenRouter, Vercel AI Gateway, or a
- * compatible server). Each channel has its own key, bound to its own host. The whole decision
- * has one deadline; within it a channel gets one retry, and a failing channel is skipped for a while.
+ * Talks to one or more System One channels (TypeSafe, OpenRouter, Vercel AI Gateway, a local
+ * Ollama, or another compatible server). Each hosted channel has its own key, bound to its own
+ * host. A loopback channel may have none, and then no key is sent. The whole decision has one
+ * deadline; within it a channel gets one retry, and a failing channel is skipped for a while.
  */
 export class JevClient {
   /**
@@ -186,22 +314,11 @@ export class JevClient {
     this.fetch = fetchImpl;
     /** @type {Map<string, ChannelStats>} */
     this.stats = new Map();
-    /** @type {LiveChannel[]} */
-    const channels = jev.channels.map((ch) => ({ ...ch, key: env[ch.keyEnv] }));
-    // JEV_BASE_URL + JEV_API_KEY add a channel in front; the key is never sent to another host.
-    if (env.JEV_BASE_URL && env.JEV_API_KEY)
-      channels.unshift({
-        name: 'env',
-        baseUrl: env.JEV_BASE_URL,
-        model: env.JEV_MODEL ?? 'jev-1.13.0',
-        key: env.JEV_API_KEY,
-        timeoutMs: 1200,
-      });
-    this.channels = channels.filter((ch) => ch.key);
+    this.channels = liveChannels(jev, env);
     for (const ch of this.channels) this.stats.set(ch.name, { calls: 0, errors: 0, lastError: null, openUntil: 0 });
   }
 
-  /** At least one channel has a key. */
+  /** At least one channel can be called: it has a key, or it is a keyless loopback channel. */
   get configured() {
     return this.channels.length > 0;
   }
@@ -283,6 +400,9 @@ export class JevClient {
    * @returns {Promise<CallResult>}
    */
   async #call(ch, state, timeoutMs, signal) {
+    const prepared = prepareQuestions(buildQuestions(this.jev), ch.local);
+    // An unsupported question fails the decision. The router then keeps the default tier.
+    if (!prepared.ok) return { ok: false, error: prepared.error };
     const signals = [AbortSignal.timeout(timeoutMs), ...(signal ? [signal] : [])];
     let res;
     let text;
@@ -291,8 +411,8 @@ export class JevClient {
         method: 'POST',
         redirect: 'error',
         signal: AbortSignal.any(signals),
-        headers: { authorization: `Bearer ${ch.key}`, 'content-type': 'application/json' },
-        body: JSON.stringify({ model: ch.model, state, questions: buildQuestions(this.jev) }),
+        headers: channelHeaders(ch),
+        body: JSON.stringify({ model: ch.model, state, questions: prepared.questions }),
       });
       text = await res.text(); // read the whole body before parsing, so an abort mid-body is just an error
     } catch (err) {
@@ -330,7 +450,7 @@ export class JevClient {
     const probabilities = tier.probabilities ?? { [String(tier.choice)]: 1 };
     return {
       ok: true,
-      model: parsed.model,
+      model: parsed.model ?? ch.model,
       requestId: res.headers.get('x-typesafe-request-id') ?? res.headers.get('x-request-id') ?? parsed.id,
       inputTokens: parsed.usage?.input_tokens,
       choice: tier.choice,
@@ -357,7 +477,8 @@ function httpFailure(res, text) {
     /** @type {{ error?: { message?: string }, detail?: string | { message?: string } }} */
     const err = JSON.parse(text);
     detail =
-      err.error?.message ?? (typeof err.detail === 'string' ? err.detail : (err.detail?.message ?? JSON.stringify(err.detail ?? '')));
+      (typeof err.error === 'string' ? err.error : err.error?.message) ??
+      (typeof err.detail === 'string' ? err.detail : (err.detail?.message ?? JSON.stringify(err.detail ?? '')));
   } catch {
     detail = waf ? 'firewall block' : text.slice(0, 120);
   }
@@ -393,6 +514,36 @@ function retryDelay(result, stat, attempt, deadline) {
   if (!RETRYABLE.has(result.status) || attempt > 0) return undefined;
   const wait = Math.min(result.retryAfterMs ?? 150, deadline - performance.now() - 200);
   return wait < 0 ? undefined : wait;
+}
+
+/**
+ * Headers for one call. A local channel gets no `Authorization` header, so a key configured for
+ * another channel cannot ride along.
+ * @param {LiveChannel} ch
+ * @returns {Record<string, string>}
+ */
+function channelHeaders(ch) {
+  return ch.key && !ch.local
+    ? { authorization: `Bearer ${ch.key}`, 'content-type': 'application/json' }
+    : { 'content-type': 'application/json' };
+}
+
+/**
+ * Policy probabilities for one channel's answer. `thresholds` replaces `accept` for the tiers it
+ * names, and the two guard probabilities when they are set. Anything left out stays on `policy`.
+ * The packaged policy is Jev's starting point. It is not a calibration for nimble or tev1.
+ * @param {Policy} policy
+ * @param {ChannelThresholds | undefined} thresholds
+ * @returns {Policy}
+ */
+export function policyFor(policy, thresholds) {
+  if (!thresholds) return policy;
+  return {
+    ...policy,
+    accept: thresholds.accept ? { ...policy.accept, ...thresholds.accept } : policy.accept,
+    sensitiveOverride: thresholds.sensitiveOverride ?? policy.sensitiveOverride,
+    claimGuard: thresholds.claimGuard ?? policy.claimGuard,
+  };
 }
 
 /**

@@ -89,14 +89,34 @@ export interface Policy {
   failClosed: boolean;
 }
 
-/** A System One endpoint: TypeSafe, OpenRouter or a compatible server. */
+/**
+ * Probability thresholds for one channel's answers. Each field replaces the same field on `policy`
+ * for decisions this channel answers. The packaged policy is a starting point for Jev; it is not a
+ * calibration for another model, so a local model sets its own.
+ */
+export interface ChannelThresholds {
+  /** Replaces `policy.accept` for the tiers it names. Other tiers keep the policy's probability. */
+  accept?: Record<string, number>;
+  /** Replaces `policy.sensitiveOverride` when set. */
+  sensitiveOverride?: number;
+  /** Replaces `policy.claimGuard` when set. */
+  claimGuard?: number;
+}
+
+/** A System One endpoint: TypeSafe, OpenRouter, a local Ollama, or another compatible server. */
 export interface JevChannel {
   name: string;
   baseUrl: string;
+  /** The decision model's id. It overrides the hosted default (`jev-1.13.0`, or `JEV_MODEL`). */
   model: string;
-  /** The environment variable with this channel's key. The key is only ever sent to `baseUrl`. */
-  keyEnv: string;
+  /**
+   * The environment variable with this channel's key. The key is only ever sent to `baseUrl`.
+   * Omitted on a loopback channel, which is called with no key and no `Authorization` header.
+   */
+  keyEnv?: string;
   timeoutMs: number;
+  /** This channel's probability thresholds. Unset fields use `policy`, which was chosen for Jev. */
+  thresholds?: ChannelThresholds;
 }
 
 /** One answer Jev may pick. Every field except `tier` is sent to Jev as a criterion. */
@@ -221,7 +241,11 @@ export interface JevState {
 export interface ChoiceQuestion {
   type: 'choice';
   instructions: string;
-  criteria: Record<string, Omit<JevOption, 'tier'>>;
+  /**
+   * One description per option. Hosted Jev receives the structured criterion (`what`, `examples`,
+   * `not_for`). A local Ollama channel receives a string, which is what its API accepts.
+   */
+  criteria: Record<string, Omit<JevOption, 'tier'> | string | null>;
 }
 
 export interface NoulQuestion {

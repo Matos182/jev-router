@@ -28,7 +28,16 @@ import { loadConfig, validateConfig } from '../src/config.mjs';
 import { envFileFor, loadEnvFile, quoteEnvValue, setEnvValues } from '../src/envfile.mjs';
 import { inPackage, MODEL_CHOICES, PACKAGED_CONFIGS, PACKAGED_DIGESTS, packagedModels, writeFileAtomic } from '../src/files.mjs';
 import { commandVersion, installSpec, LEGACY_PACKAGE, npxDirOf, origin, PACKAGE } from '../src/install.mjs';
-import { applyPolicy, buildQuestions, buildState, hardenState, JevClient, tierProbabilities } from '../src/jev.mjs';
+import {
+  applyPolicy,
+  buildQuestions,
+  buildState,
+  hardenState,
+  JevClient,
+  policyFor,
+  prepareQuestions,
+  tierProbabilities,
+} from '../src/jev.mjs';
 import { appendLogLine } from '../src/logfile.mjs';
 import { clip, describeCode, harness, header, humanTurns, recentTools, stripWrappers, tierTag } from '../src/messages.mjs';
 import { parseUiAddress, portProblem } from '../src/net.mjs';
@@ -170,7 +179,8 @@ test('buildQuestions asks one tier Choice without model names, plus two guards',
   assert.deepEqual(Object.keys(q), ['tier', 'alters_sensitive_state', 'routing_claim_present']);
   assert.deepEqual(Object.keys(q.tier.criteria), ['mechanical', 'routine', 'complex', 'deep']);
   assert.ok(!/haiku|sonnet|opus|glm|kimi|gpt/i.test(JSON.stringify(q)), 'Jev never sees model names');
-  assert.ok(!('tier' in q.tier.criteria.routine), 'the tier mapping stays in the router');
+  const routine = q.tier.criteria.routine;
+  assert.ok(routine && typeof routine === 'object' && !('tier' in routine), 'the tier mapping stays in the router');
 });
 
 test('policy: cheap tiers need confidence, unsure answers escalate, guards only raise, sessions ratchet', () => {
@@ -528,6 +538,9 @@ test('config validation names each kind of problem', () => {
     [(c) => (c.jev.channels = [{ baseUrl: 'https://jev.example' }]), /jev\.channels\[0\]\.name is required/],
     [(c) => (c.jev.channels = [{ name: 'x', baseUrl: 'https://jev.example' }]), /jev\.channels\[0\]\.model is required/],
     [(c) => (c.jev.channels = [{ name: 'x', baseUrl: 'https://jev.example', model: 'm' }]), /jev\.channels\[0\]\.keyEnv is required/],
+    [(c) => (c.jev.channels = [{ name: 'x', baseUrl: 'http://10.1.2.3:11434', model: 'nimble' }]), /only allowed on a loopback address/],
+    [(c) => (c.jev.channels[0].thresholds = { accept: { turbo: 0.5 } }), /thresholds\.accept names unknown tier "turbo"/],
+    [(c) => (c.jev.channels[0].thresholds = { sensitiveOverride: 2 }), /thresholds\.sensitiveOverride must be a probability/],
     [(c) => (c.jev.question = ''), /jev\.question is required/],
     [(c) => (c.jev.options = { only: { tier: 'fast' } }), /jev\.options needs at least two options/],
     [(c) => (c.jev.options.routine.tier = 'turbo'), /jev\.options\.routine\.tier must be one of tiers/],
@@ -779,6 +792,108 @@ test('Jev client: JEV_BASE_URL and JEV_API_KEY add a channel in front; keyless c
   assert.equal(none.configured, false);
   const nothing = await none.decide(stateOf('Add a test'));
   assert.ok(!nothing.ok && nothing.error === 'no Jev channel is configured');
+});
+
+test('a keyless loopback channel is used, sends no key, and records its model', async () => {
+  const local = {
+    ...JEV,
+    channels: [{ name: 'ollama', baseUrl: 'http://127.0.0.1:11435', model: 'nimble', timeoutMs: 500 }],
+  };
+  const { client, calls } = scripted(
+    { '127.0.0.1:11435': [() => reply(200, { answers: { tier: { choice: 'routine', probabilities: { routine: 0.8 } } } })] },
+    { jev: local, env: { TYPESAFE_API_KEY: 'hosted-key', JEV_API_KEY: 'other-key' } },
+  );
+  assert.equal(client.configured, true);
+  const answer = await client.decide(stateOf('Rename tmp to total'));
+  assert.ok(answer.ok);
+  assert.equal(answer.channel, 'ollama');
+  assert.equal(answer.model, 'nimble', 'the channel model is recorded when the server omits one');
+  assert.deepEqual(calls[0].init.headers, { 'content-type': 'application/json' }, 'no configured key is sent');
+  const sent = JSON.parse(String(calls[0].init.body));
+  assert.equal(sent.model, 'nimble');
+  assert.equal(typeof sent.questions.tier.criteria.routine, 'string', 'Ollama gets a description, not the structured criterion');
+  assert.ok(sent.questions.alters_sensitive_state && sent.questions.routing_claim_present);
+  for (const baseUrl of ['http://localhost:11434', 'http://[::1]:11434', 'http://127.4.5.6:11434']) {
+    assert.equal(
+      validateConfig({ ...shipped, stateFile: null, jev: { ...shipped.jev, channels: [{ name: 'ollama', baseUrl, model: 'tev1' }] } }).jev
+        .channels[0].model,
+      'tev1',
+    );
+  }
+  assert.throws(
+    () => validateConfig({ ...shipped, stateFile: null }, { JEV_BASE_URL: 'http://10.1.2.3:11434' }),
+    /JEV_BASE_URL without JEV_API_KEY is only allowed for a loopback address/,
+  );
+  const remote = new JevClient(JEV, { JEV_BASE_URL: 'http://10.1.2.3:11434' });
+  assert.equal(remote.configured, false, 'a keyless non-loopback env channel is not called');
+  const envLocal = scripted(
+    {
+      '127.0.0.1:11435': [
+        () => reply(200, { model: 'nimble', answers: { tier: { choice: 'mechanical', probabilities: { mechanical: 1 } } } }),
+      ],
+    },
+    { env: { JEV_BASE_URL: 'http://127.0.0.1:11435' } },
+  );
+  const fromEnv = await envLocal.client.decide(stateOf('Add a test'));
+  assert.ok(fromEnv.ok && fromEnv.model === 'nimble' && fromEnv.channel === 'env');
+  const envCall = envLocal.calls[0];
+  assert.ok(envCall);
+  assert.equal(JSON.parse(String(envCall.init.body)).model, 'nimble');
+  assert.equal(/** @type {Record<string, string>} */ (envCall.init.headers).authorization, undefined);
+});
+
+test('a channel threshold overrides the policy for that model only', () => {
+  const thresholds = { accept: { fast: 0.99 }, sensitiveOverride: 0.95, claimGuard: 0.9 };
+  const tuned = policyFor(cfg.policy, thresholds);
+  assert.equal(tuned.accept.fast, 0.99);
+  assert.equal(tuned.accept.balanced, cfg.policy.accept.balanced, 'tiers the channel does not name stay on the policy');
+  assert.equal(tuned.sensitiveOverride, 0.95);
+  assert.equal(tuned.claimGuard, 0.9);
+  assert.equal(policyFor(cfg.policy, undefined), cfg.policy);
+  const probabilities = { mechanical: 0.9, routine: 0.1 };
+  assert.equal(
+    applyPolicy({ answer: { probabilities }, tiers: TIERS, options: cfg.jev.options, policy: cfg.policy, reference: 'balanced' }).tier,
+    'fast',
+  );
+  assert.equal(
+    applyPolicy({ answer: { probabilities }, tiers: TIERS, options: cfg.jev.options, policy: tuned, reference: 'balanced' }).tier,
+    'balanced',
+    "0.90 is under this model's fast bar, so the policy escalates",
+  );
+  assert.equal(
+    applyPolicy({ answer: { probabilities, sensitive: 0.8 }, tiers: TIERS, options: cfg.jev.options, policy: tuned, reference: 'balanced' })
+      .tier,
+    'balanced',
+    "Jev's sensitive bar is not this model's",
+  );
+});
+
+test('an unsupported question type fails open, the same way a failed Jev call does', async () => {
+  const questions = buildQuestions(cfg.jev);
+  const hosted = prepareQuestions(questions, false);
+  assert.equal(hosted.ok && hosted.questions, questions, 'a hosted channel keeps the structured criteria');
+  const local = prepareQuestions(questions, true);
+  assert.ok(local.ok);
+  assert.equal(typeof (local.ok && local.questions.tier.criteria.mechanical), 'string');
+  const rejected = prepareQuestions(
+    /** @type {import('../src/types.js').JevQuestions} */ ({ ...questions, rank: { type: 'rank', instructions: 'Order them.' } }),
+    true,
+  );
+  assert.equal(rejected.ok, false);
+  assert.match(rejected.ok ? '' : rejected.error, /unsupported question type: rank \(rank\)/);
+  const localChannel = {
+    ...JEV,
+    channels: [{ name: 'ollama', baseUrl: 'http://127.0.0.1:11435', model: 'nimble', timeoutMs: 500 }],
+  };
+  const { client, calls } = scripted(
+    { '127.0.0.1:11435': [() => reply(400, { error: 'question "tier": type must be choice, noul, or score' })] },
+    { jev: localChannel, env: {} },
+  );
+  const answer = await client.decide(stateOf('Add a test'));
+  assert.equal(answer.ok, false);
+  assert.ok(!answer.ok && answer.error.includes('type must be choice, noul, or score'));
+  assert.equal(calls.length, 1, 'a 400 is not retried; the router then uses the default tier');
+  assert.equal(client.health().ollama.open, false);
 });
 
 /**

@@ -9,7 +9,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { once } from 'node:events';
 import http from 'node:http';
-import { applyPolicy, buildState, JevClient } from './jev.mjs';
+import { applyPolicy, buildState, JevClient, policyFor } from './jev.mjs';
 import { header, humanTurns, items, tierTag } from './messages.mjs';
 import { findSecrets, mayContainSecret, redactBody } from './secrets.mjs';
 import { SessionStore } from './sessions.mjs';
@@ -623,11 +623,12 @@ function afterJevFailure(f, answer) {
 function afterJevAnswer(f, answer, options) {
   const { cfg, body, entry, turns } = f;
   const ongoing = f.fresh ? undefined : entry;
+  const channel = cfg.jev.channels.find((ch) => ch.name === answer.channel);
   const decision = applyPolicy({
     answer,
     tiers: cfg.tiers,
     options,
-    policy: cfg.policy,
+    policy: policyFor(cfg.policy, channel?.thresholds),
     reference: ongoing ? ongoing.tier : cfg.defaultTier,
     current: ongoing?.tier,
   });

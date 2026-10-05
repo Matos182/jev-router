@@ -37,7 +37,7 @@ import {
   shellQuote,
   userConfigPath,
 } from './files.mjs';
-import { JevClient, SAMPLE_STATE } from './jev.mjs';
+import { isLoopbackBaseUrl, JevClient, SAMPLE_STATE } from './jev.mjs';
 import { appendLogLine } from './logfile.mjs';
 import { clientHost, isLoopback, LOOPBACK, parsePort, parseUiAddress, probe, TOKEN_HEADER, UI_PORT, urlHost } from './net.mjs';
 import { createRouter, describeConfig, report, VERSION } from './router.mjs';
@@ -898,12 +898,19 @@ function checkConfig(list, flag, env) {
  * @param {NodeJS.ProcessEnv} env
  */
 function checkJevKeys(list, cfg, env) {
-  for (const { name, keyEnv } of cfg.jev.channels) {
-    list.add(env[keyEnv] ? 'ok' : 'warn', 'jev', `${name}: ${keyEnv} is ${env[keyEnv] ? 'set' : 'not set'}`);
+  for (const { name, keyEnv, baseUrl, model } of cfg.jev.channels) {
+    if (!keyEnv) list.add('ok', 'jev', `${name}: local channel at ${baseUrl}, model ${model}, no key`);
+    else list.add(env[keyEnv] ? 'ok' : 'warn', 'jev', `${name}: ${keyEnv} is ${env[keyEnv] ? 'set' : 'not set'}`);
   }
   if (env.JEV_BASE_URL && env.JEV_API_KEY) list.add('ok', 'jev', 'env: JEV_BASE_URL and JEV_API_KEY are set, so this channel goes first');
+  else if (env.JEV_BASE_URL && isLoopbackBaseUrl(env.JEV_BASE_URL))
+    list.add('ok', 'jev', `env: JEV_BASE_URL is a local channel, model ${env.JEV_MODEL || 'nimble'}, no key`);
   if (!new JevClient(cfg.jev, env).configured) {
-    const keys = cfg.jev.channels.map((ch) => ch.keyEnv).join(' or ') || 'JEV_BASE_URL and JEV_API_KEY';
+    const keys =
+      cfg.jev.channels
+        .map((ch) => ch.keyEnv)
+        .filter(Boolean)
+        .join(' or ') || 'JEV_BASE_URL on a loopback address';
     list.add('FAIL', 'jev', `no Jev channel has a key, so every session would get the default tier "${cfg.defaultTier}". Set ${keys}.`);
   }
 }
@@ -999,7 +1006,8 @@ function checkService(list, env, router) {
 }
 
 /**
- * One real Jev call with a small state in the shape the router sends. It costs about $0.00003.
+ * One real decision call with a small state in the shape the router sends. A hosted call costs about
+ * $0.00003. A local channel costs nothing. The line says which model answered.
  * @param {Checklist} list
  * @param {Config} cfg
  * @param {NodeJS.ProcessEnv} env
