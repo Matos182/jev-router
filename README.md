@@ -299,6 +299,7 @@ Then, for every request, the router:
 1. **Redacts.** For an untrusted target it redacts secrets anywhere in the body, tool output included.
 1. **Drops unsupported fields.** It removes the fields the target lists in `omit`, for example the adaptive
    `thinking`, `output_config.effort` and `context_management` that Haiku 4.5 rejects.
+1. **Sets the effort.** A target with `effort` runs every request at that effort, whatever the client asked for.
 1. **Caps the output.** It lowers `max_tokens` to what the target's model accepts. Claude Code asks for 128,000
    output tokens because it believes it talks to Opus 5.5, and Haiku 4.5 refuses anything above 64,000. The limits
    of the Claude models in the shipped configs are built in, and a target's `maxOutputTokens` overrides them.
@@ -483,7 +484,7 @@ release or an earlier one, and keeps any other. `jev-router init` writes one wit
 | `jev.channels` | Ordered System One channels, each with `baseUrl`, `model` (pin a version such as `jev-1.13.0`), `keyEnv` and `timeoutMs` |
 | `jev.deadlineMs`, `jev.requestChars` | The total Jev budget per decision, and the size cap for the latest message |
 | `jev.question`, `jev.options` | The rubric: one choice question with `what`, `examples` and `not_for` per option, and each option's `tier` |
-| `surfaces.<anthropic\|openai>.<tier\|side\|trusted>` | Targets: `url`, `model`, `auth` (`x-api-key` or `bearer`), `keyEnv`, `clientAuth`, `trusted`, `countTokens`, `omit`, `maxOutputTokens`, `foldSystemMessages`, `omitBetas` |
+| `surfaces.<anthropic\|openai>.<tier\|side\|trusted>` | Targets: `url`, `model`, `auth` (`x-api-key` or `bearer`), `keyEnv`, `clientAuth`, `trusted`, `countTokens`, `omit`, `effort`, `maxOutputTokens`, `foldSystemMessages`, `omitBetas` |
 | `prices`, `baselineModel` | USD per million tokens for the cost ledger, and the model savings are measured against |
 | `sideCallModel`, `pinOnModelChange`, `modelPins` | Background-call detection, and model family to tier for `/model` switches |
 | `host`, `port`, `token`, `allowedHosts`, `allowedOrigins`, `maxBodyBytes`, `maxSessions`, `stateFile` | Server settings |

@@ -39,6 +39,11 @@ export interface Target {
   /** Fields the upstream rejects, as dotted paths such as `output_config.effort`. */
   omit?: string[];
   /**
+   * The reasoning effort every request to this target runs at, over the client's own: `output_config.effort` on
+   * Messages, `reasoning.effort` on Responses. Not set on count_tokens.
+   */
+  effort?: string;
+  /**
    * The most output tokens the model accepts; a larger `max_tokens` or `max_output_tokens` is lowered to it.
    * Defaults to the measured limit of known Claude models (64000 for Haiku 4.5, 128000 for the Claude 5 family).
    */

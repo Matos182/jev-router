@@ -218,6 +218,10 @@ function checkTarget(target, where, need) {
     `${where}.omit must be a list of field paths`,
   );
   need(
+    target.effort === undefined || (typeof target.effort === 'string' && target.effort !== ''),
+    `${where}.effort must be an effort level`,
+  );
+  need(
     target.maxOutputTokens === undefined || (Number.isInteger(target.maxOutputTokens) && Number(target.maxOutputTokens) > 0),
     `${where}.maxOutputTokens must be a positive whole number`,
   );

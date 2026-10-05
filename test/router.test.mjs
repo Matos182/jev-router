@@ -916,6 +916,24 @@ test("a target's omit list removes nested fields and keeps their siblings", asyn
   assert.deepEqual(sent.output_config, { format: 'text' }, 'only output_config.effort goes');
 });
 
+test("a target's effort replaces the client's, keeps its siblings, and stays off count_tokens", async () => {
+  const cfg = testConfig();
+  const targets = cfg.surfaces.anthropic;
+  assert.ok(targets);
+  targets.frontier.effort = 'max';
+  const { url } = await startRouter({ cfg });
+  const headers = { ...claudeCodeHeaders('s-effort'), 'x-jev-tier': 'frontier' };
+  const body = { ...cc('s-effort', 'Design the migration'), output_config: { effort: 'medium', format: 'text' } };
+  const d = await delta(() => post(url, '/v1/messages', body, headers));
+  assert.deepEqual(d.anthropic[0].body.output_config, { effort: 'max', format: 'text' });
+  const plain = await delta(() => post(url, '/v1/messages', cc('s-effort', 'Design the migration'), headers));
+  assert.deepEqual(plain.anthropic[0].body.output_config, { effort: 'max' }, 'set when the client sent none');
+  const count = await delta(() => post(url, '/v1/messages/count_tokens', cc('s-effort', 'Design the migration'), headers));
+  assert.equal(count.anthropic[0].body.output_config, undefined);
+  const other = await delta(() => post(url, '/v1/messages', body, { ...claudeCodeHeaders('s-effort-2'), 'x-jev-tier': 'balanced' }));
+  assert.deepEqual(other.anthropic[0].body.output_config, { effort: 'medium', format: 'text' }, 'other tiers pass it through');
+});
+
 test("max_tokens is capped at the target model's output limit, and an upstream error's message is logged", async () => {
   // Claude Code sizes max_tokens for the model it thinks it talks to: 128000 for Opus 5.5.
   const { url, done } = await startRouter();
