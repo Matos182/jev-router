@@ -936,7 +936,7 @@ function isJsonObject(value) {
  * @returns {Promise<{ status: number, bytes: number, sha256: string, usage: Usage | undefined, aborted: boolean, broken: boolean, error?: string }>}
  */
 async function forward(req, res, target, body, shown, signal, env) {
-  const upstream = await fetch(target.url + req.url, {
+  const upstream = await fetch(target.url + upstreamPath(req.url ?? '', target), {
     method: 'POST',
     headers: upstreamHeaders(req, target, env),
     body: JSON.stringify(body),
@@ -1026,6 +1026,18 @@ function errorMessage(text) {
     // not JSON: the start of the body below
   }
   return text.replace(/\s+/g, ' ').trim().slice(0, 200);
+}
+
+/**
+ * The path a target gets: the client's path, query included, with the target's `stripPath` removed when it is a
+ * whole leading segment (`/v1` strips `/v1/responses`, never `/v1beta/responses`).
+ * @param {string} path
+ * @param {Target} target
+ */
+function upstreamPath(path, target) {
+  const prefix = target.stripPath;
+  if (!prefix || !path.startsWith(prefix) || !['', '/', '?'].includes(path.charAt(prefix.length))) return path;
+  return path.slice(prefix.length);
 }
 
 /**

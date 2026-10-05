@@ -305,6 +305,34 @@ env_http_headers = { "x-jev-router-token" = "JEV_ROUTER_TOKEN" }
 To pin every session started with this profile to one tier, add `http_headers = { "x-jev-tier" = "frontier" }` in
 the same table.
 
+### Codex on a ChatGPT login
+
+Codex signed in with ChatGPT (`codex login`) can send its OpenAI tiers to your ChatGPT plan instead of
+`OPENAI_API_KEY`. Point those targets at ChatGPT's Codex backend and let the router pass Codex's login through:
+
+```json
+"frontier": {
+  "url": "https://chatgpt.com/backend-api/codex",
+  "model": "gpt-6-astra",
+  "auth": "bearer",
+  "clientAuth": true,
+  "trusted": true,
+  "stripPath": "/v1"
+}
+```
+
+Do the same for `max` and `trusted`, and leave out `keyEnv`: a key the router holds wins over the login. Then
+add one line under `[model_providers.jev]` in the profile, so Codex sends its ChatGPT token and account header to
+the router:
+
+```toml
+requires_openai_auth = true
+```
+
+The router forwards the token, and the `ChatGPT-Account-ID` header with it, only to targets with `clientAuth` and
+`trusted`. Ollama Cloud tiers keep their own key and get only content headers, so the login never leaves for
+another provider. Use a model your plan offers; `~/.codex/models_cache.json` lists them.
+
 ## Run the router as a service
 
 A service keeps one router running for all your clients, independent of any terminal, and restarts it if it fails.

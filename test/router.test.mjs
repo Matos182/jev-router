@@ -281,6 +281,34 @@ test('Codex traffic goes to Ollama Cloud with a bearer key, minimal headers and 
   assert.equal(d.jevA[0].body.state.session.harness, 'Codex CLI');
 });
 
+test("a ChatGPT-login target gets the client's own login on a path with stripPath removed", async () => {
+  reset(plans.a, { option: 'complex', probability: 0.9 });
+  const cfg = testConfig();
+  const openaiTargets = cfg.surfaces.openai ?? {};
+  for (const tier of ['frontier', 'max', 'trusted']) {
+    const target = openaiTargets[tier];
+    if (!target) continue;
+    delete target.keyEnv;
+    Object.assign(target, { url: `${openai.url}/backend-api/codex`, clientAuth: true, trusted: true, stripPath: '/v1' });
+  }
+  const { url } = await startRouter({ cfg });
+  const login = { authorization: 'Bearer chatgpt-login', 'chatgpt-account-id': 'acct-1', 'x-jev-tier': 'frontier' };
+  const body = codexBody('t-chatgpt', 'Design the zero-downtime migration for the orders table.');
+  const d = await delta(() => post(url, '/v1/responses?client=codex', body, codexHeaders('t-chatgpt', login)));
+  assert.equal(d.result.status, 200);
+  const up = d.openai[0];
+  assert.equal(up.url, '/backend-api/codex/responses?client=codex');
+  assert.equal(up.headers.authorization, 'Bearer chatgpt-login');
+  assert.equal(up.headers['chatgpt-account-id'], 'acct-1');
+  assert.equal(up.headers['x-jev-tier'], undefined);
+
+  const cheap = await delta(() => post(url, '/v1/responses', body, codexHeaders('t-chatgpt-fast', { ...login, 'x-jev-tier': 'fast' })));
+  const fast = cheap.ollama[0];
+  assert.equal(fast.headers.authorization, `Bearer ${KEYS.OLLAMA_API_KEY}`, 'an untrusted target never sees the login');
+  assert.equal(fast.headers['chatgpt-account-id'], undefined);
+  assert.equal(fast.url, '/v1/responses');
+});
+
 test('a session ratchets: tool loops never ask Jev, a harder new turn upgrades, an easier one keeps the tier', async () => {
   const { url, routes, logs, done } = await startRouter();
   const h = ccHeaders('s-ratchet');

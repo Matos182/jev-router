@@ -22,8 +22,13 @@ export type Surface = 'anthropic' | 'openai';
 
 /** An upstream that serves one tier of one surface. */
 export interface Target {
-  /** Base URL. The client's request path, query included, is appended unchanged. */
+  /** Base URL. The client's request path, query included, is appended unchanged, less `stripPath`. */
   url: string;
+  /**
+   * A prefix removed from the client's path before it is appended to `url`. `"/v1"` for ChatGPT's Codex backend,
+   * which serves `/responses` under `https://chatgpt.com/backend-api/codex`.
+   */
+  stripPath?: string;
   /** Replaces the client's `model`. */
   model: string;
   /** How the router's key is sent: an `x-api-key` header or `authorization: Bearer`. */
