@@ -2,6 +2,10 @@
 // startup instead of quietly turning off a guard or rerouting traffic. Every problem is reported at once.
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
+import { parseKeepAlive } from './duration.mjs';
+
+// Go's largest time.Duration. Ollama refuses a longer keep_alive.
+const MAX_KEEP_ALIVE_MS = 2562047 * 3600000;
 
 /** @import { ChannelThresholds, Config, Env, JevChannel, JevConfig, Policy, Target } from './types.js' */
 
@@ -181,6 +185,15 @@ function checkJev(input, tiers, need) {
     } else need(typeof ch.keyEnv === 'string' && ch.keyEnv, keyEnvMessage(i));
     // Anything else fails every Jev call, before it is made.
     need(isCount(ch.timeoutMs, 1), `jev.channels[${i}].timeoutMs must be a whole number of milliseconds above 0`);
+    if (ch.keepAlive !== undefined) {
+      need(!ch.keyEnv && isLoopbackBaseUrl(ch.baseUrl), `jev.channels[${i}].keepAlive is only allowed on a keyless loopback channel`);
+      const duration = parseKeepAlive(ch.keepAlive);
+      need(duration !== undefined, `jev.channels[${i}].keepAlive must be a duration with units, such as "10m", or a number of seconds`);
+      need(
+        duration === undefined || duration === Infinity || (duration >= 1000 && duration <= MAX_KEEP_ALIVE_MS),
+        `jev.channels[${i}].keepAlive must be from 1 second to 2562047h, or negative to keep the model loaded`,
+      );
+    }
     checkThresholds(ch.thresholds, i, tiers, need);
   }
   need(typeof jev.question === 'string' && jev.question.length > 0, 'jev.question is required');

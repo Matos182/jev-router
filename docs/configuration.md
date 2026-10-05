@@ -145,6 +145,7 @@ human message, up to `maxProvisional` attempts (`reason: fallback:default`). An 
 | `jev.stripCode` | `true` | `true` or `false` | Accepted, but the router doesn't read it yet: code blocks are always replaced by a one-line summary |
 | `jev.guards` | `true` | `true` or `false` | Ask the two guard questions, `alters_sensitive_state` and `routing_claim_present`, in the same request as the tier question |
 | `jev.channels` | `[]` | An array of objects. Each channel needs a `name`, an http(s) `baseUrl` and a `model`. A `keyEnv` is required unless `baseUrl` is loopback | System One channels, tried in order. A loopback channel with no `keyEnv` is a local decision model |
+| `jev.channels[].keepAlive` | unset | A duration with units such as `"10m"`, or a number of seconds, from 1 second to `2562047h`; negative means forever. Keyless loopback only | Loads the model in the background and sends `keep_alive` with decisions to keep it resident |
 | `jev.channels[].timeoutMs` | `1200` | A whole number above 0 | Timeout for one attempt on this channel |
 | `jev.channels[].thresholds` | the policy's probabilities | `accept` (probabilities keyed by tier), `sensitiveOverride` and `claimGuard`, each a probability from 0 to 1 | Replaces those policy probabilities for answers from this channel. There is no shipped calibration for nimble or tev1 |
 | `jev.question` | none, required | A non-empty string | The instructions of the tier question |
@@ -184,6 +185,37 @@ each choice criterion to be a description string. For a local channel the router
 `examples` and `not_for` into that string. Hosted channels still receive the structured
 criterion. The model id in the answer is the one the server returns, or the channel's `model` when the body omits it.
 It is stored on the route log's `jev.model`.
+
+For Ollama, set `keepAlive` on a keyless loopback channel to avoid repeated cold-start timeouts:
+
+```json
+{ "name": "ollama", "baseUrl": "http://127.0.0.1:11434", "model": "nimble", "keepAlive": "10m" }
+```
+
+Durations use Go units: `ns`, `us` (also `µs` or `μs`), `ms`, `s`, `m` and `h`, including fractions and compounds
+such as `"1h30m"`. A JSON number is seconds. A string needs a unit: Ollama refuses `"600"`. Negative values such
+as `-1` or `"-1m"` keep the model resident forever. Values under one second are refused, since Ollama would unload
+the model before the next turn, and so are values over `2562047h`, the longest duration Ollama accepts.
+
+The router starts a prompt-free `POST /api/generate` with `{model, keep_alive}` when it starts listening and
+after a config reload. Each channel has at most one load in flight, with a separate five-minute timeout to match
+Ollama's own load timeout. Request cancellation does not abort it. Shutdown aborts it, and a reload aborts the old
+client's loads after the new client has started its own.
+
+Every decision sends `keep_alive`. A successful load or decision renews the tracked residency. The router treats
+it as expired two seconds early (or 10% early for durations shorter than 20 seconds), to allow the next request
+to reach Ollama. On the next turn, an expired channel starts another load and is skipped immediately.
+While loading, turns try the next channel, or keep `defaultTier` when none answers.
+
+A decision timeout also starts a load, and opens the usual 30-second breaker. A load slower than `timeoutMs`
+shows the model was cold, so it clears the breaker. A faster one shows the model was resident and the channel is
+slow, so the breaker stays open. A failed load opens the breaker; the next successful load clears it. Channels
+without `keepAlive` keep their timeout and breaker behavior. Hosted payloads do not change.
+
+`/healthz` reports `warmup` per opted-in channel: `idle` before its first load or successful decision, `warming`
+during a load, `warm` within the tracked residency, `cold` after expiry, or `failed` after a failed load.
+These states estimate residency; they do not query Ollama. `doctor` displays the running router's state without
+loading models. `doctor --live` makes its explicit decision call, without background loads.
 
 How the channels fail over, within `deadlineMs`:
 
@@ -366,6 +398,7 @@ Invalid router config:
 | Other policy keys | `policy.maxProvisional must be a whole number, 0 or more`, `policy.idleResetMinutes must be a number of minutes, 0 or more`, `policy.failClosed must be true or false` |
 | `jev` settings | `jev.deadlineMs must be a whole number of milliseconds above 0`, `jev.requestChars must be a whole number above 0`, `jev.stripCode must be true or false`, `jev.guards must be true or false` |
 | `jev.channels` | `jev.channels must be an array`, `jev.channels[i] must be an object`, `jev.channels[i].name is required`, `….baseUrl must be an http(s) URL`, `….model is required`, `….keyEnv is required (a channel without a key is only allowed on a loopback address)`, `….keyEnv must be a name when set`, `….timeoutMs must be a whole number of milliseconds above 0`, `….thresholds must be an object`, `….thresholds.<field> is not a threshold`, `….thresholds.accept must be an object`, `….thresholds.accept names unknown tier "…"`, `….thresholds.accept.<tier> must be a probability`, `….thresholds.sensitiveOverride must be a probability`, `….thresholds.claimGuard must be a probability` |
+| `jev.channels[].keepAlive` | `….keepAlive is only allowed on a keyless loopback channel`, `….keepAlive must be a duration with units, such as "10m", or a number of seconds`, `….keepAlive must be from 1 second to 2562047h, or negative to keep the model loaded` |
 | `jev.question`, `jev.options` | `jev.question is required`, `jev.options needs at least two options`, `jev.options.<name>.tier must be one of tiers` |
 | `surfaces` | `surfaces is required`, `surfaces.<surface> has no target for tier "…"`, `surfaces.<surface> routes some tiers to untrusted upstreams, so it needs a trusted target marked "trusted": true` |
 | Targets | `….url must be an http(s) URL`, `….model is required`, `….auth must be "x-api-key" or "bearer"`, `… needs keyEnv or clientAuth`, `….omit must be a list of field paths`, `….maxOutputTokens must be a positive whole number`, `….foldSystemMessages must be true or false`, `….omitBetas must be a list of beta names` |

@@ -480,7 +480,7 @@ release or an earlier one, and keeps any other. `jev-router init` writes one wit
 | `policy.escalationCeiling` | The most capable tier that the step up after a missed bar can reach; unset, the top tier. The Fable config sets `frontier` |
 | `policy.sensitiveOverride`, `policy.claimGuard` | Guard thresholds |
 | `policy.maxProvisional`, `policy.idleResetMinutes`, `policy.failClosed` | Retries after Jev failures, the idle reset, and whether unvetted sessions use trusted targets |
-| `jev.channels` | Ordered System One channels, each with `baseUrl`, `model` (pin a version such as `jev-1.13.0`) and `timeoutMs`. `keyEnv` is required off loopback. `thresholds` replaces the policy's probabilities for that channel |
+| `jev.channels` | Ordered System One channels, each with `baseUrl`, `model` (pin a version such as `jev-1.13.0`) and `timeoutMs`. `keyEnv` is required off loopback. `keepAlive` warms keyless local Ollama models and sets residency. `thresholds` replaces the policy's probabilities for that channel |
 | `jev.deadlineMs`, `jev.requestChars` | The total Jev budget per decision, and the size cap for the latest message |
 | `jev.question`, `jev.options` | The rubric: one choice question with `what`, `examples` and `not_for` per option, and each option's `tier` |
 | `surfaces.<anthropic\|openai>.<tier\|side\|trusted>` | Targets: `url`, `model`, `auth` (`x-api-key` or `bearer`), `keyEnv`, `clientAuth`, `trusted`, `countTokens`, `omit`, `maxOutputTokens`, `foldSystemMessages`, `omitBetas` |
@@ -530,7 +530,7 @@ upstreams. Pull `nimble` (9B) or `tev1` (4B), start Ollama, and add a channel on
 `keyEnv`:
 
 ```json
-{ "name": "ollama", "baseUrl": "http://127.0.0.1:11434", "model": "nimble" }
+{ "name": "ollama", "baseUrl": "http://127.0.0.1:11434", "model": "nimble", "keepAlive": "10m" }
 ```
 
 The router sends that channel no `Authorization` header, and it does not use another channel's key there. A channel
@@ -547,6 +547,10 @@ session gets `defaultTier` and an ongoing one keeps its tier. Keep the model
 loaded (`OLLAMA_KEEP_ALIVE=-1` on the Ollama server, then one call such as
 `curl http://127.0.0.1:11434/api/generate -d '{"model":"nimble"}'`), or raise the channel's `timeoutMs` and
 `jev.deadlineMs`.
+
+Optional `keepAlive` loads a keyless local Ollama model in the background and renews its residency on each
+successful decision. Turns skip the channel while it loads, including after residency expires.
+See [configuration](docs/configuration.md) for accepted values, health states and failure behavior.
 
 Ollama answers `choice` and `noul`, which are the questions the router asks, and `score`, which it does not. A question
 type the server does not support fails the channel the way a failed Jev call does: the next channel decides, and when
@@ -674,7 +678,7 @@ kit, and later the npm package. [docs/releasing.md](docs/releasing.md) has the s
 
 ## Status
 
-The current release is 1.6.0. The offline suite has 187 tests against mock upstreams and a mock Jev, and the package
+The current release is 1.6.0. The offline suite has 203 tests against mock upstreams and a mock Jev, and the package
 smoke test installs the packed package and runs it the way a user would.
 
 Live checks on 2026-09-24 ran Claude Code 2.1.281 through the router against Anthropic and found six problems, listed

@@ -115,6 +115,8 @@ export interface JevChannel {
    */
   keyEnv?: string;
   timeoutMs: number;
+  /** Ollama model residency: a nonzero duration string or seconds; negative means forever. Keyless loopback only. */
+  keepAlive?: string | number;
   /** This channel's probability thresholds. Unset fields use `policy`, which was chosen for Jev. */
   thresholds?: ChannelThresholds;
 }
@@ -310,6 +312,8 @@ export type JevAnswer = JevSuccess | JevFailure;
 
 /** Per-channel counters behind /healthz and the circuit breaker. */
 export interface ChannelStats {
+  /** Only present for local channels with keepAlive; warm means residency has not expired. */
+  warmup?: 'idle' | 'cold' | 'warming' | 'warm' | 'failed';
   calls: number;
   errors: number;
   lastError: string | null;

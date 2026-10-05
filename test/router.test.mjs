@@ -1329,3 +1329,38 @@ test("a Jev answer is judged by the answering channel's thresholds, even when an
   assert.ok(route.jev?.ok && route.jev.channel === 'env', 'the shortcut is the channel named in the log');
   assert.equal(d.result.headers.get('x-jev-tier'), 'frontier', 'the global sensitiveOverride (0.7) applies, not the other channel');
 });
+
+test('router start and reload warm local models, and closing aborts their independent loads', async (t) => {
+  const config = testConfig();
+  config.jev.channels = [{ name: 'local', baseUrl: 'http://localhost', model: 'nimble', timeoutMs: 1200, keepAlive: '10m' }];
+  /** @type {RequestInit[]} */
+  const loads = [];
+  const server = createRouter(config, {
+    env: KEYS,
+    log: (entry) => allLogs.push(entry),
+    fetchImpl: async (url, init) => {
+      if (!url.endsWith('/api/generate')) return fetch(url, init);
+      loads.push(init);
+      return new Promise((_, reject) => {
+        init.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true });
+      });
+    },
+  });
+  t.after(() => close(server));
+  assert.equal(loads.length, 0, 'creating a server does not load a model before it listens');
+  const url = await listen(server);
+  assert.equal(loads.length, 1);
+  /** @returns {Promise<Health>} */
+  const health = async () => /** @type {Health} */ (await (await fetch(`${url}/healthz`)).json());
+  assert.equal((await health()).jev.channels.local.warmup, 'warming');
+  const d = await delta(() => post(url, '/v1/messages', cc('local-cold', 'Add a test'), ccHeaders('local-cold')));
+  assert.equal(d.result.status, 200);
+  assert.equal(d.jevA.length + d.jevB.length, 0, 'warming falls back without a decision call');
+  assert.equal(d.anthropic.length, 1);
+  server.reload(config);
+  assert.equal(loads[0].signal?.aborted, true, 'reload disposes the previous client');
+  assert.equal(loads.length, 2);
+  assert.equal((await health()).jev.channels.local.warmup, 'warming');
+  await close(server);
+  assert.equal(loads[1].signal?.aborted, true, 'close aborts the current load');
+});

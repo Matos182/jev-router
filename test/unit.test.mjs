@@ -27,6 +27,7 @@ import { parseEnv, promisify } from 'node:util';
 import zlib from 'node:zlib';
 import { changeSettingsEnv, readSettings, settingsBlock, settingsSet } from '../src/claude.mjs';
 import { loadConfig, validateConfig } from '../src/config.mjs';
+import { parseKeepAlive } from '../src/duration.mjs';
 import { envFileFor, loadEnvFile, quoteEnvValue, setEnvValues } from '../src/envfile.mjs';
 import { inPackage, MODEL_CHOICES, PACKAGED_CONFIGS, PACKAGED_DIGESTS, packagedModels, writeFileAtomic } from '../src/files.mjs';
 import { commandVersion, installSpec, LEGACY_PACKAGE, npxDirOf, origin, PACKAGE } from '../src/install.mjs';
@@ -630,9 +631,9 @@ const hang = (init) =>
 /**
  * A Jev client whose channels answer from a script: each host's replies are used up in order.
  * @param {Record<string, Array<(init: RequestInit) => Response | Promise<Response>>>} script
- * @param {{ env?: Record<string, string>, jev?: JevConfig }} [options]
+ * @param {{ env?: Record<string, string>, jev?: JevConfig, now?: () => number }} [options]
  */
-function scripted(script, { env = { ONE_KEY: 'key-one', TWO_KEY: 'key-two' }, jev = JEV } = {}) {
+function scripted(script, { env = { ONE_KEY: 'key-one', TWO_KEY: 'key-two' }, jev = JEV, now = Date.now } = {}) {
   /** @type {Array<{ host: string, init: RequestInit }>} */
   const calls = [];
   /** @type {FetchLike} */
@@ -643,7 +644,7 @@ function scripted(script, { env = { ONE_KEY: 'key-one', TWO_KEY: 'key-two' }, je
     if (!next) throw new Error(`no scripted reply for ${host}`);
     return next(init);
   };
-  return { client: new JevClient(jev, env, { fetchImpl }), calls };
+  return { client: new JevClient(jev, env, { fetchImpl, now }), calls };
 }
 
 test('Jev client: 401, 402 and a JSON 403 skip the channel for five minutes and move on', async () => {
@@ -983,6 +984,406 @@ test('the direct fetch refuses a URL with a user or password, as fetch does, and
   } finally {
     await server.close();
   }
+});
+
+test('parseKeepAlive reads numbers as seconds and strings as Go durations, with negatives meaning forever', () => {
+  for (const [value, ms] of [
+    [600, 600000],
+    [0.5, 500],
+    ['1ns', 0.000001],
+    ['1us', 0.001],
+    ['1µs', 0.001],
+    ['1μs', 0.001],
+    ['1ms', 1],
+    ['1s', 1000],
+    ['1m', 60000],
+    ['1h', 3600000],
+    ['1h30m', 5400000],
+    ['1m0.5s', 60500],
+    ['.5s', 500],
+    ['1.s', 1000],
+    ['+1s', 1000],
+    [-1, Infinity],
+    ['-1m', Infinity],
+    ['-1h30m', Infinity],
+    [0, 0],
+    ['0s', 0],
+    ['-0m', 0],
+  ])
+    assert.equal(parseKeepAlive(value), ms, String(value));
+  for (const value of [
+    '',
+    ' ',
+    '600',
+    '.5',
+    '-1',
+    '0',
+    'banana',
+    '1d',
+    '1m 30s',
+    '1m-30s',
+    '1e3',
+    '1e3s',
+    '1..2s',
+    's',
+    '.',
+    null,
+    true,
+    {},
+    Infinity,
+    NaN,
+    '9'.repeat(400),
+  ])
+    assert.equal(parseKeepAlive(value), undefined, String(value));
+});
+
+test('keepAlive takes durations Ollama accepts, from 1 second up, only on keyless loopback channels', () => {
+  /** @param {unknown} keepAlive @param {object} [extra] */
+  const config = (keepAlive, extra = {}) => ({
+    ...shipped,
+    stateFile: null,
+    jev: { ...shipped.jev, channels: [{ name: 'local', baseUrl: 'http://localhost', model: 'nimble', keepAlive, ...extra }] },
+  });
+  for (const value of ['10m', '1h', '1s', '1h30m', '2562047h', 600, 1, -1, '-1m'])
+    assert.equal(validateConfig(config(value)).jev.channels[0].keepAlive, value);
+  for (const value of ['', ' ', 'banana', '10', '-1', null, true, Infinity])
+    assert.throws(() => validateConfig(config(value)), /keepAlive must be a duration with units, such as "10m", or a number of seconds/);
+  for (const value of [0, '0s', '-0m', 0.5, '999ms', '2562048h', 9.3e15])
+    assert.throws(() => validateConfig(config(value)), /keepAlive must be from 1 second to 2562047h, or negative to keep the model loaded/);
+  for (const extra of [{ keyEnv: 'KEY' }, { baseUrl: 'https://remote.invalid', keyEnv: 'KEY' }])
+    assert.throws(() => validateConfig(config('10m', extra)), /keepAlive is only allowed on a keyless loopback channel/);
+});
+
+/** @param {string | number | undefined} [keepAlive] @returns {JevConfig} */
+const localJev = (keepAlive = '10m') => ({
+  ...JEV,
+  channels: [{ name: 'local', baseUrl: 'http://localhost', model: 'nimble', timeoutMs: 20, keepAlive }, ...JEV.channels],
+});
+
+test('expired residency is cold, starts one load and skips decisions until warm again', async (t) => {
+  let now = 1000;
+  /** @type {(response: Response) => void} */
+  let loaded = () => assert.fail('load has not started');
+  const { client, calls } = scripted(
+    {
+      localhost: [
+        () => reply(200, {}),
+        () =>
+          new Promise((resolve) => {
+            loaded = resolve;
+          }),
+        () => good(),
+      ],
+      'one.invalid': [() => good(), () => good()],
+    },
+    { jev: localJev('10s'), now: () => now },
+  );
+  t.after(() => client.close());
+  await client.warm();
+  assert.equal(client.health().local.warmup, 'warm');
+  now += 10000;
+  assert.equal(client.health().local.warmup, 'cold');
+  assert.equal(calls.length, 1, 'health does not start a load');
+  const before = client.health().local.calls;
+  const fallback = await client.decide(stateOf('Add a test'));
+  assert.ok(fallback.ok && fallback.channel === 'one');
+  assert.equal(client.health().local.calls, before, 'expiry skips the decision without waiting for timeout');
+  assert.equal(client.health().local.warmup, 'warming');
+  assert.deepEqual(JSON.parse(String(calls[1].init.body)), { model: 'nimble', keep_alive: '10s' });
+  const second = await client.decide(stateOf('Add a test'));
+  assert.ok(second.ok && second.channel === 'one');
+  assert.equal(calls.filter((call) => call.host === 'localhost').length, 2, 'only one reload is in flight');
+  loaded(reply(200, {}));
+  await client.warm();
+  assert.equal(client.health().local.warmup, 'warm');
+  const local = await client.decide(stateOf('Add a test'));
+  assert.ok(local.ok && local.channel === 'local');
+});
+
+test('a successful decision renews residency, including the safety margin for short durations', async (t) => {
+  /** @type {Array<[string, number]>} */
+  const cases = [
+    ['10m', 598000],
+    ['1s', 900],
+  ];
+  for (const [keepAlive, safeMs] of cases) {
+    let now = 1000;
+    const { client } = scripted({ localhost: [() => reply(200, {}), () => good()] }, { jev: localJev(keepAlive), now: () => now });
+    t.after(() => client.close());
+    await client.warm();
+    now += safeMs - 1;
+    const decision = await client.decide(stateOf('Add a test'));
+    assert.ok(decision.ok && decision.channel === 'local');
+    now += 1;
+    assert.equal(client.health().local.warmup, 'warm', 'the original residency expired but the decision renewed it');
+    now += safeMs - 1;
+    assert.equal(client.health().local.warmup, 'cold', 'the renewed residency expires at the safety margin');
+  }
+});
+
+test('a decision completing during a residency reload keeps the channel warming', async (t) => {
+  let now = 1000;
+  /** @type {(response: Response) => void} */
+  let decided = () => assert.fail('decision has not started');
+  /** @type {(response: Response) => void} */
+  let loaded = () => assert.fail('load has not started');
+  const { client, calls } = scripted(
+    {
+      localhost: [
+        () => reply(200, {}),
+        () =>
+          new Promise((resolve) => {
+            decided = resolve;
+          }),
+        () =>
+          new Promise((resolve) => {
+            loaded = resolve;
+          }),
+      ],
+      'one.invalid': [() => good()],
+    },
+    { jev: localJev('10s'), now: () => now },
+  );
+  t.after(() => client.close());
+  await client.warm();
+  const decision = client.decide(stateOf('Add a test'));
+  now += 10000;
+  const fallback = await client.decide(stateOf('Add a test'));
+  assert.ok(fallback.ok && fallback.channel === 'one');
+  decided(good());
+  assert.ok((await decision).ok);
+  assert.equal(client.health().local.warmup, 'warming', 'a successful decision does not hide the pending load');
+  assert.equal(calls.length, 4);
+  loaded(reply(200, {}));
+  await client.warm();
+  assert.equal(client.health().local.warmup, 'warm');
+});
+
+test('negative keepAlive never expires after a warm-up or a successful decision', async (t) => {
+  for (const keepAlive of [-1, '-1m']) {
+    let now = 1000;
+    const { client, calls } = scripted({ localhost: [() => reply(200, {}), () => good()] }, { jev: localJev(keepAlive), now: () => now });
+    t.after(() => client.close());
+    await client.warm();
+    now += 365 * 24 * 3600000;
+    assert.equal(client.health().local.warmup, 'warm');
+    assert.ok((await client.decide(stateOf('Add a test'))).ok);
+    now += 365 * 24 * 3600000;
+    assert.equal(client.health().local.warmup, 'warm');
+    assert.equal(calls.length, 2);
+    assert.equal(JSON.parse(String(calls[1].init.body)).keep_alive, keepAlive);
+  }
+});
+
+test('decisions establish residency without warm-up, and expired live diagnostics never start loads', async (t) => {
+  let now = 1000;
+  const { client, calls } = scripted({ localhost: [() => good(), () => good()] }, { jev: localJev('10s'), now: () => now });
+  t.after(() => client.close());
+  assert.equal(client.health().local.warmup, 'idle');
+  assert.ok((await client.decide(stateOf('Add a test'))).ok);
+  assert.equal(client.health().local.warmup, 'warm');
+  now += 10000;
+  assert.equal(client.health().local.warmup, 'cold');
+  assert.ok((await client.decide(stateOf('Add a test'), { warmOnTimeout: false })).ok);
+  assert.equal(client.health().local.warmup, 'warm');
+  assert.equal(calls.length, 2);
+  for (const call of calls) assert.ok(JSON.parse(String(call.init.body)).state, 'only decision calls were sent');
+});
+
+test('warm is explicit, single-flight, skips loading channels, and keeps hosted payloads unchanged', async () => {
+  /** @type {(response: Response) => void} */
+  let loaded = () => assert.fail('load request has not started');
+  const { client, calls } = scripted(
+    {
+      localhost: [
+        () =>
+          new Promise((resolve) => {
+            loaded = resolve;
+          }),
+        () => good(),
+      ],
+      'one.invalid': [() => good()],
+    },
+    { jev: localJev() },
+  );
+  assert.equal(calls.length, 0, 'the constructor does not load models');
+  const warming = client.warm();
+  const again = client.warm();
+  assert.equal(calls.length, 1);
+  assert.deepEqual(JSON.parse(String(calls[0].init.body)), { model: 'nimble', keep_alive: '10m' });
+  assert.deepEqual(calls[0].init.headers, { 'content-type': 'application/json' });
+  assert.equal(client.health().local.warmup, 'warming');
+  const fallback = await client.decide(stateOf('Add a test'));
+  assert.ok(fallback.ok && fallback.channel === 'one');
+  assert.equal(
+    String(calls[1].init.body),
+    JSON.stringify({ model: JEV.channels[0].model, state: stateOf('Add a test'), questions: buildQuestions(JEV) }),
+  );
+  loaded(reply(200, { done_reason: 'load' }));
+  await Promise.all([warming, again]);
+  assert.equal(client.health().local.warmup, 'warm');
+  assert.equal(client.health().local.open, false);
+  assert.ok((await client.decide(stateOf('Add a test'))).ok);
+  assert.equal(JSON.parse(String(calls[2].init.body)).keep_alive, '10m');
+  client.close();
+});
+
+test('a timeout opens the breaker and warms independently of the caller', async () => {
+  const { client, calls } = scripted({ localhost: [hang, hang], 'one.invalid': [() => good(), () => good()] }, { jev: localJev() });
+  const caller = new AbortController();
+  const first = await client.decide(stateOf('Add a test'), { signal: caller.signal });
+  assert.ok(first.ok && first.channel === 'one');
+  assert.equal(client.health().local.open, true);
+  assert.equal(client.health().local.warmup, 'warming');
+  caller.abort();
+  assert.equal(calls[1].init.signal?.aborted, false, 'warm-up survives request abort');
+  const second = await client.decide(stateOf('Add a test'));
+  assert.ok(second.ok && second.channel === 'one');
+  assert.equal(calls.filter((c) => c.host === 'localhost').length, 2);
+  const pending = client.warm();
+  client.close();
+  await pending;
+  assert.equal(calls[1].init.signal?.aborted, true);
+  await client.warm();
+  assert.equal(calls.length, 4, 'close prevents further warm-ups');
+});
+
+test('after a timeout, only a load slower than timeoutMs clears the breaker', async () => {
+  const slow = () => new Promise((resolve) => setTimeout(() => resolve(reply(200, { done_reason: 'load' })), 40));
+  /** @type {[(init: RequestInit) => Promise<Response> | Response, boolean][]} */
+  const cases = [
+    [slow, false],
+    [() => reply(200, { done_reason: 'load' }), true],
+  ];
+  for (const [load, open] of cases) {
+    const jev = localJev();
+    jev.channels = jev.channels.slice(0, 1);
+    const { client } = scripted({ localhost: [hang, load] }, { jev });
+    const result = await client.decide(stateOf('Add a test'));
+    assert.ok(!result.ok && result.error.includes('local: timeout'));
+    await client.warm();
+    assert.equal(client.health().local.warmup, 'warm');
+    assert.equal(client.health().local.open, open);
+    client.close();
+  }
+});
+
+test('failed warm-ups open the breaker and a later successful warm-up clears it', async () => {
+  for (const failure of [
+    () => reply(503, { error: 'load failed' }),
+    () => {
+      throw new TypeError('offline');
+    },
+    () => {
+      throw new DOMException('load timeout', 'TimeoutError');
+    },
+  ]) {
+    const { client } = scripted({ localhost: [failure, () => reply(200, { done_reason: 'load' }), () => good()] }, { jev: localJev() });
+    await client.warm();
+    assert.equal(client.health().local.warmup, 'failed');
+    assert.equal(client.health().local.open, true);
+    const skipped = await client.decide(stateOf('Add a test'));
+    assert.ok(!skipped.ok && skipped.error.includes('local: skipped (failing)'));
+    await client.warm();
+    assert.equal(client.health().local.open, false);
+    assert.equal(client.health().local.lastError, null);
+    assert.ok((await client.decide(stateOf('Add a test'))).ok);
+    client.close();
+  }
+});
+
+test('warm ignores hosted channels and local channels without keepAlive', async () => {
+  const jev = localJev();
+  delete jev.channels[0].keepAlive;
+  const { client, calls } = scripted({ localhost: [() => good()] }, { jev });
+  await client.warm();
+  assert.equal(calls.length, 0);
+  assert.ok((await client.decide(stateOf('Add a test'))).ok);
+  assert.equal(JSON.parse(String(calls[0].init.body)).keep_alive, undefined);
+  client.close();
+});
+
+test('warming alone falls through immediately and live diagnostics never trigger recovery loads', async () => {
+  const jev = localJev();
+  jev.channels = jev.channels.slice(0, 1);
+  const { client, calls } = scripted({ localhost: [hang] }, { jev });
+  const pending = client.warm();
+  const result = await client.decide(stateOf('Add a test'));
+  assert.ok(!result.ok && result.error === 'local: warming');
+  assert.equal(calls.length, 1);
+  client.close();
+  await pending;
+  const diagnostic = scripted({ localhost: [hang] }, { jev });
+  await diagnostic.client.decide(stateOf('Add a test'), { warmOnTimeout: false });
+  assert.equal(diagnostic.calls.length, 1);
+  assert.equal(diagnostic.client.health().local.open, true);
+  diagnostic.client.close();
+});
+
+test('a warm-up has its own long timeout and a closed client sends nothing', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { client, calls } = scripted(
+    {
+      localhost: [
+        (init) =>
+          new Promise((_, reject) => {
+            init.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true });
+          }),
+      ],
+    },
+    { jev: localJev() },
+  );
+  const pending = client.warm();
+  t.mock.timers.tick(299999);
+  assert.equal(client.health().local.warmup, 'warming');
+  assert.equal(calls[0].init.signal?.aborted, false);
+  t.mock.timers.tick(1);
+  await pending;
+  assert.equal(client.health().local.warmup, 'failed');
+  assert.equal(client.health().local.open, true);
+  client.close();
+  const stopped = scripted({}, { jev: localJev() });
+  stopped.client.close();
+  await stopped.client.warm();
+  assert.equal(stopped.calls.length, 0);
+});
+
+test('a synchronous fetch failure releases the warm-up flight for the next load', async (t) => {
+  let calls = 0;
+  const client = new JevClient(
+    localJev(),
+    {},
+    {
+      fetchImpl: () => {
+        calls += 1;
+        if (calls === 1) throw new TypeError('offline');
+        return Promise.resolve(reply(200, {}));
+      },
+    },
+  );
+  t.after(() => client.close());
+  await client.warm();
+  assert.equal(client.health().local.warmup, 'failed');
+  await client.warm();
+  assert.equal(client.health().local.warmup, 'warm');
+  assert.equal(calls, 2);
+});
+
+test('without a fetchImpl the warm-up loads a loopback model with a direct request', async (t) => {
+  const ollama = await mockServer((_call, res) => json(res, 200, {}));
+  const jev = localJev();
+  const client = new JevClient({ ...jev, channels: [{ ...jev.channels[0], baseUrl: ollama.url }] }, {});
+  t.after(async () => {
+    client.close();
+    await ollama.close();
+  });
+  await client.warm();
+  assert.deepEqual(
+    ollama.calls.map((call) => call.url),
+    ['/api/generate'],
+  );
+  assert.equal(ollama.calls[0]?.body.keep_alive, '10m');
+  assert.equal(client.health().local.warmup, 'warm');
 });
 
 test('a channel threshold overrides the policy for that model only', () => {

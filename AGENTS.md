@@ -184,10 +184,11 @@ network.
 <!-- AGENTS-GENERATED:START module-boundaries -->
 | Module | May import |
 | --- | --- |
-| `config`, `files`, `logfile`, `messages`, `prompt`, `secrets`, `sessions`, `ui`, `usage` | Node built-ins only, nothing from `src/` |
+| `duration`, `files`, `logfile`, `messages`, `prompt`, `secrets`, `sessions`, `ui`, `usage` | Node built-ins only, nothing from `src/` |
+| `config` | `duration` |
 | `envfile`, `install`, `net`, `service` | `files` |
 | `claude` | `files`, `net` |
-| `jev` | `messages`, `secrets` |
+| `jev` | `duration`, `messages`, `secrets` |
 | `router` | `jev`, `messages`, `secrets`, `sessions`, `usage` |
 | `setup` | `claude`, `config`, `envfile`, `files`, `install`, `jev`, `net`, `prompt`, `router` (for `VERSION`), `service` |
 | `uninstall` | `claude`, `config`, `envfile`, `files`, `install`, `net`, `service`, `setup` |

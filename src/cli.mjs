@@ -972,7 +972,7 @@ async function checkRouter(list, cfg, env) {
   const { answered, health } = await probe(url);
   if (health) {
     const channels = Object.entries(health.jev.channels).map(
-      ([name, s]) => `${name} ${s.open ? `failing (${s.lastError})` : 'ok'} (${s.calls} calls, ${s.errors} errors)`,
+      ([name, s]) => `${name} ${s.open ? `failing (${s.lastError})` : (s.warmup ?? 'ok')} (${s.calls} calls, ${s.errors} errors)`,
     );
     const jev = health.jev.configured ? channels.join(', ') : 'no channel has a key';
     list.add(
@@ -1020,7 +1020,8 @@ async function checkLive(list, cfg, env) {
     list.add('info', 'live', 'skipped: no Jev channel has a key');
     return;
   }
-  const answer = await client.decide(SAMPLE_STATE);
+  const answer = await client.decide(SAMPLE_STATE, { warmOnTimeout: false });
+  client.close();
   if (answer.ok) list.add('ok', 'live', `${answer.channel} answered in ${answer.ms} ms with ${answer.model} (choice: ${answer.choice})`);
   else list.add('FAIL', 'live', `no answer after ${answer.ms} ms: ${answer.error}`);
 }

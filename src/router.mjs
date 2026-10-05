@@ -451,6 +451,9 @@ export function createRouter(
     res.end(JSON.stringify(body));
   }
 
+  server.on('listening', () => void jev.warm());
+  server.on('close', () => jev.close());
+
   // Not Object.assign: it would read the `active` getter once and copy a 0 that never changes.
   Object.defineProperties(
     server,
@@ -461,8 +464,12 @@ export function createRouter(
       },
       /** @param {Config} next */
       reload(next) {
+        // Start the new loads before aborting the old ones, so a reload during a cold load keeps a load in flight.
+        const previous = jev;
         cfg = next;
         jev = new JevClient(cfg.jev, env, { fetchImpl });
+        void jev.warm();
+        previous.close();
       },
     }),
   );

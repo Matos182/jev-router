@@ -1,6 +1,7 @@
 // Everything that involves Jev, TypeSafe's System One decision model: the state it sees, the
 // questions it answers, the channels it's reached through, and the policy that turns its
 // probabilities into a tier. Jev's answer is advice; the rules that must hold stay in code.
+import { parseKeepAlive } from './duration.mjs';
 import { clip, describeCode, harness, lastAssistantText, recentTools } from './messages.mjs';
 import { directFetch } from './net.mjs';
 import { scrub } from './secrets.mjs';
@@ -13,7 +14,9 @@ import { scrub } from './secrets.mjs';
 /**
  * A channel with its key read from the environment. `local` channels are loopback and keyless:
  * nothing in the environment is sent to them.
- * @typedef {Omit<JevChannel, 'keyEnv'> & { key: string | undefined, local: boolean }} LiveChannel
+ * @typedef {Omit<JevChannel, 'keyEnv'> & {
+ *   key: string | undefined, local: boolean, keepAliveMs?: number, residentUntil?: number
+ * }} LiveChannel
  */
 
 /**
@@ -147,6 +150,11 @@ export function buildQuestions(jev) {
 /** @type {ReadonlySet<number | undefined>} */
 const RETRYABLE = new Set([408, 429, 500, 502, 503, 504, 529]);
 
+// Ollama's own OLLAMA_LOAD_TIMEOUT is 5 minutes without progress; a slow disk must not be cut off sooner.
+const WARM_TIMEOUT_MS = 300000;
+// Leave two seconds for the next request to reach Ollama; cap at 10% so short residencies remain useful.
+const RESIDENCY_MARGIN_MS = 2000;
+
 /** Question types Ollama 0.35 documents for `POST /v1/systemone`. Choice and noul are the ones the router asks. */
 const LOCAL_QUESTION_TYPES = new Set(['choice', 'noul', 'score']);
 
@@ -181,7 +189,12 @@ function liveChannels(jev, env) {
   /** @type {LiveChannel[]} */
   const channels = jev.channels.map((ch) => {
     const local = !ch.keyEnv && isLoopbackBaseUrl(ch.baseUrl);
-    return { ...ch, key: local || !ch.keyEnv ? undefined : env[ch.keyEnv], local };
+    return {
+      ...ch,
+      key: local || !ch.keyEnv ? undefined : env[ch.keyEnv],
+      local,
+      keepAliveMs: local ? parseKeepAlive(ch.keepAlive) : undefined,
+    };
   });
   // JEV_BASE_URL + JEV_API_KEY add a channel in front. That key belongs to this channel; it is never
   // sent to another host. JEV_BASE_URL alone is a channel only on loopback, and then no key is sent.
@@ -308,16 +321,114 @@ export class JevClient {
   /**
    * @param {JevConfig} jev
    * @param {Env} env where the channel keys are read from
-   * @param {{ fetchImpl?: FetchLike }} [options] a fetch for every channel; without one, loopback
-   *   channels skip any proxy and the rest use the global fetch
+   * @param {{ fetchImpl?: FetchLike, now?: () => number }} [options] a fetch for every channel;
+   *   without one, loopback channels skip any proxy and the rest use the global fetch. `now`
+   *   returns epoch milliseconds.
    */
-  constructor(jev, env, { fetchImpl } = {}) {
+  constructor(jev, env, { fetchImpl, now = Date.now } = {}) {
     this.jev = jev;
     this.fetch = fetchImpl;
+    this.now = now;
     /** @type {Map<string, ChannelStats>} */
     this.stats = new Map();
+    /** @type {Map<string, { controller: AbortController, promise: Promise<void> }>} */
+    this.warmups = new Map();
+    this.closed = false;
     this.channels = liveChannels(jev, env);
-    for (const ch of this.channels) this.stats.set(ch.name, { calls: 0, errors: 0, lastError: null, openUntil: 0 });
+    for (const ch of this.channels)
+      this.stats.set(ch.name, {
+        calls: 0,
+        errors: 0,
+        lastError: null,
+        openUntil: 0,
+        ...(ch.keepAliveMs !== undefined ? { warmup: /** @type {const} */ ('idle') } : {}),
+      });
+  }
+
+  /** Starts independent model loads for local keepAlive channels. Safe to ignore or await; never rejects. */
+  async warm() {
+    await Promise.all(this.channels.map((ch) => this.#warm(ch)));
+  }
+
+  /** Aborts background loads and prevents new ones. */
+  close() {
+    this.closed = true;
+    for (const { controller } of this.warmups.values()) controller.abort();
+  }
+
+  /** @param {LiveChannel} ch @returns {Promise<void> | undefined} */
+  #warm(ch) {
+    if (this.closed || ch.keepAliveMs === undefined) return undefined;
+    const pending = this.warmups.get(ch.name);
+    if (pending) return pending.promise;
+    const controller = new AbortController();
+    const stat = /** @type {ChannelStats} */ (this.stats.get(ch.name));
+    const recovering = stat.warmup === 'failed';
+    stat.warmup = 'warming';
+    const { promise, resolve } = Promise.withResolvers();
+    this.warmups.set(ch.name, { controller, promise });
+    void this.#load(ch, stat, controller, recovering).then(resolve);
+    return promise;
+  }
+
+  /**
+   * @param {LiveChannel} ch
+   * @param {ChannelStats} stat
+   * @param {AbortController} controller
+   * @param {boolean} recovering the previous warm-up failed and opened the breaker
+   */
+  async #load(ch, stat, controller, recovering) {
+    const timer = setTimeout(() => controller.abort(new DOMException('warm-up timed out', 'TimeoutError')), WARM_TIMEOUT_MS);
+    timer.unref();
+    const started = performance.now();
+    try {
+      controller.signal.throwIfAborted();
+      const res = await (this.fetch ?? directFetch)(`${ch.baseUrl.replace(/\/$/, '')}/api/generate`, {
+        method: 'POST',
+        redirect: 'error',
+        signal: controller.signal,
+        headers: channelHeaders(ch),
+        body: JSON.stringify({ model: ch.model, keep_alive: ch.keepAlive }),
+      });
+      const text = await res.text();
+      controller.signal.throwIfAborted();
+      if (!res.ok) throw new Error(httpFailure(res, text).error);
+      this.#renew(ch, stat);
+      stat.warmup = 'warm';
+      // Ollama answers at once when the model is already resident. After a timeout, only a load that took
+      // as long as the timeout explains it; a fast one leaves the breaker open, since the channel is slow, not cold.
+      if (recovering || performance.now() - started >= ch.timeoutMs) {
+        stat.openUntil = 0;
+        stat.lastError = null;
+      }
+    } catch (err) {
+      if (!this.closed) {
+        stat.warmup = 'failed';
+        stat.errors += 1;
+        stat.lastError = `warm-up: ${err instanceof Error ? err.message : String(err)}`;
+        stat.openUntil = this.now() + 30000;
+      }
+    } finally {
+      clearTimeout(timer);
+      this.warmups.delete(ch.name);
+    }
+  }
+
+  /**
+   * Records the residency renewed by a successful load or decision.
+   * @param {LiveChannel} ch
+   * @param {ChannelStats} stat
+   */
+  #renew(ch, stat) {
+    if (ch.keepAliveMs === undefined) return;
+    const margin = Math.min(RESIDENCY_MARGIN_MS, ch.keepAliveMs / 10);
+    ch.residentUntil = this.now() + ch.keepAliveMs - margin;
+    if (!this.warmups.has(ch.name)) stat.warmup = 'warm';
+  }
+
+  /** @param {LiveChannel} ch */
+  #expired(ch) {
+    return ch.residentUntil !== undefined && this.now() >= ch.residentUntil;
   }
 
   /** At least one channel can be called: it has a key, or it is a keyless loopback channel. */
@@ -330,23 +441,35 @@ export class JevClient {
    * @returns {Record<string, ChannelStats & { open: boolean }>}
    */
   health() {
-    return Object.fromEntries([...this.stats].map(([name, s]) => [name, { ...s, open: s.openUntil > Date.now() }]));
+    return Object.fromEntries(
+      this.channels.map((ch) => {
+        const stat = /** @type {ChannelStats} */ (this.stats.get(ch.name));
+        return [
+          ch.name,
+          {
+            ...stat,
+            ...(stat.warmup === 'warm' && this.#expired(ch) ? { warmup: 'cold' } : {}),
+            open: stat.openUntil > this.now(),
+          },
+        ];
+      }),
+    );
   }
 
   /**
    * Asks the channels in order until one answers. Never throws: a failure is an answer too.
    * @param {JevState} state
-   * @param {{ signal?: AbortSignal }} [options] `signal` aborts when the client goes away
+   * @param {{ signal?: AbortSignal, warmOnTimeout?: boolean }} [options] Live diagnostics disable background loads.
    * @returns {Promise<JevAnswer>}
    */
-  async decide(state, { signal } = {}) {
+  async decide(state, { signal, warmOnTimeout = true } = {}) {
     const started = performance.now();
     const deadline = started + this.jev.deadlineMs;
     /** @type {string[]} */
     const errors = [];
     for (const ch of this.channels) {
       if (signal?.aborted) break;
-      const answer = await this.#ask(ch, state, { started, deadline, signal, errors });
+      const answer = await this.#ask(ch, state, { started, deadline, signal, errors, warmOnTimeout });
       if (answer) return answer;
     }
     const ms = Math.round(performance.now() - started);
@@ -360,13 +483,22 @@ export class JevClient {
    * the next channel should be tried.
    * @param {LiveChannel} ch
    * @param {JevState} state
-   * @param {{ started: number, deadline: number, signal?: AbortSignal, errors: string[] }} run
+   * @param {{ started: number, deadline: number, signal?: AbortSignal, errors: string[], warmOnTimeout: boolean }} run
    * @returns {Promise<JevAnswer | undefined>}
    */
-  async #ask(ch, state, { started, deadline, signal, errors }) {
+  async #ask(ch, state, { started, deadline, signal, errors, warmOnTimeout }) {
     const stat = /** @type {ChannelStats} */ (this.stats.get(ch.name)); // the constructor adds stats for every channel
-    if (stat.openUntil > Date.now()) {
+    if (stat.warmup === 'warming') {
+      errors.push(`${ch.name}: warming`);
+      return undefined;
+    }
+    if (stat.openUntil > this.now()) {
       errors.push(`${ch.name}: skipped (failing)`);
+      return undefined;
+    }
+    if (warmOnTimeout && !this.closed && this.#expired(ch)) {
+      this.#warm(ch);
+      errors.push(`${ch.name}: warming`);
       return undefined;
     }
     let payloadState = state;
@@ -376,8 +508,10 @@ export class JevClient {
       if (remaining < 150 || signal?.aborted) break;
       stat.calls += 1;
       const result = withoutKey(await this.#call(ch, payloadState, Math.min(ch.timeoutMs, remaining), signal), ch.key);
-      if (result.ok)
+      if (result.ok) {
+        this.#renew(ch, stat);
         return { ...result, channel: ch.name, thresholds: ch.thresholds, ms: Math.round(performance.now() - started), hardened };
+      }
       if (result.aborted) return { ok: false, aborted: true, error: 'client went away', ms: Math.round(performance.now() - started) };
       stat.errors += 1;
       stat.lastError = result.error;
@@ -387,7 +521,8 @@ export class JevClient {
         hardened = true;
         continue;
       }
-      const wait = retryDelay(result, stat, attempt, deadline);
+      if (warmOnTimeout && result.timeout && ch.keepAliveMs !== undefined && !this.closed) this.#warm(ch);
+      const wait = retryDelay(result, stat, attempt, deadline, this.now());
       if (wait === undefined) break;
       await sleep(wait);
     }
@@ -416,7 +551,12 @@ export class JevClient {
         redirect: 'error',
         signal: AbortSignal.any(signals),
         headers: channelHeaders(ch),
-        body: JSON.stringify({ model: ch.model, state, questions: prepared.questions }),
+        body: JSON.stringify({
+          model: ch.model,
+          state,
+          questions: prepared.questions,
+          ...(ch.keepAliveMs !== undefined ? { keep_alive: ch.keepAlive } : {}),
+        }),
       });
       text = await res.text(); // read the whole body before parsing, so an abort mid-body is just an error
     } catch (err) {
@@ -504,15 +644,16 @@ function httpFailure(res, text) {
  * @param {ChannelStats} stat
  * @param {number} attempt
  * @param {number} deadline
+ * @param {number} now epoch milliseconds
  * @returns {number | undefined}
  */
-function retryDelay(result, stat, attempt, deadline) {
+function retryDelay(result, stat, attempt, deadline, now) {
   if (result.timeout || result.network) {
-    stat.openUntil = Date.now() + 30000;
+    stat.openUntil = now + 30000;
     return undefined;
   }
   if (result.status === 401 || result.status === 402 || result.status === 403) {
-    stat.openUntil = Date.now() + 300000;
+    stat.openUntil = now + 300000;
     return undefined;
   }
   if (!RETRYABLE.has(result.status) || attempt > 0) return undefined;
