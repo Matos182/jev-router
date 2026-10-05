@@ -154,8 +154,10 @@ The router calls `POST {baseUrl}/v1/systemone` with a body of `model`, `state` a
 `Authorization: Bearer <key>` and is used only when the environment variable named by its `keyEnv` is set. Its key is
 only ever sent to its own `baseUrl`. A channel with no `keyEnv` is used only when `baseUrl` is loopback (127.0.0.0/8,
 `::1` or `localhost`). That request has no `Authorization` header, and no other channel's key is sent there. Any other
-keyless channel, including `JEV_BASE_URL` without `JEV_API_KEY` on a non-loopback host, is refused when the config is
-loaded. The shipped channels:
+keyless channel is refused when the config is loaded; `JEV_BASE_URL` without `JEV_API_KEY` on a non-loopback host is
+ignored. A channel with a `keyEnv` is treated as a hosted server even on loopback: it gets its key and the structured
+criteria. A loopback channel is called directly, never through `HTTP_PROXY`, so the routing state stays on the machine.
+The shipped channels:
 
 | `name` | `baseUrl` | `model` | `keyEnv` |
 | --- | --- | --- | --- |
@@ -285,7 +287,7 @@ ledger.
 | `JEV_ROUTER_SETUP_WAIT` | `setup` | How many seconds to wait for the service's router to answer; 15 by default |
 | `CLAUDE_CONFIG_DIR` | `setup`, `uninstall`, `doctor` | Where Claude Code's `settings.json` is: `$CLAUDE_CONFIG_DIR/settings.json`, else `~/.claude/settings.json` |
 | `CODEX_HOME` | `launch codex`, `env codex` | Where the Codex profile goes: `$CODEX_HOME/jev.config.toml`, else `~/.codex/jev.config.toml` |
-| `JEV_BASE_URL`, `JEV_API_KEY`, `JEV_MODEL` | The Jev client | Add a channel in front of `jev.channels`. With `JEV_API_KEY`, any host. Without it, only a loopback host, and no key is sent. `JEV_MODEL` defaults to `jev-1.13.0` with a key and to `nimble` without one |
+| `JEV_BASE_URL`, `JEV_API_KEY`, `JEV_MODEL` | The Jev client | Add a channel in front of `jev.channels`. With `JEV_API_KEY`, any host. Without it, only a loopback host, and no key is sent; on any other host it is ignored. `JEV_MODEL` defaults to `jev-1.13.0` with a key and to `nimble` without one |
 
 The key variables are the `keyEnv` names in the shipped configs. A config can name any variable instead.
 
@@ -363,7 +365,6 @@ Invalid router config:
 | Other policy keys | `policy.maxProvisional must be a whole number, 0 or more`, `policy.idleResetMinutes must be a number of minutes, 0 or more`, `policy.failClosed must be true or false` |
 | `jev` settings | `jev.deadlineMs must be a whole number of milliseconds above 0`, `jev.requestChars must be a whole number above 0`, `jev.stripCode must be true or false`, `jev.guards must be true or false` |
 | `jev.channels` | `jev.channels must be an array`, `jev.channels[i] must be an object`, `jev.channels[i].name is required`, `….baseUrl must be an http(s) URL`, `….model is required`, `….keyEnv is required (a channel without a key is only allowed on a loopback address)`, `….keyEnv must be a name when set`, `….timeoutMs must be a whole number of milliseconds above 0`, `….thresholds must be an object`, `….thresholds.<field> is not a threshold`, `….thresholds.accept must be an object`, `….thresholds.accept names unknown tier "…"`, `….thresholds.accept.<tier> must be a probability`, `….thresholds.sensitiveOverride must be a probability`, `….thresholds.claimGuard must be a probability` |
-| `JEV_BASE_URL` | `JEV_BASE_URL without JEV_API_KEY is only allowed for a loopback address (127.0.0.0/8, ::1 or localhost)` |
 | `jev.question`, `jev.options` | `jev.question is required`, `jev.options needs at least two options`, `jev.options.<name>.tier must be one of tiers` |
 | `surfaces` | `surfaces is required`, `surfaces.<surface> has no target for tier "…"`, `surfaces.<surface> routes some tiers to untrusted upstreams, so it needs a trusted target marked "trusted": true` |
 | Targets | `….url must be an http(s) URL`, `….model is required`, `….auth must be "x-api-key" or "bearer"`, `… needs keyEnv or clientAuth`, `….omit must be a list of field paths`, `….maxOutputTokens must be a positive whole number`, `….foldSystemMessages must be true or false`, `….omitBetas must be a list of beta names` |

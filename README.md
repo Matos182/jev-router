@@ -533,7 +533,16 @@ per-token bill. Pull `nimble` (9B) or `tev1` (4B), start Ollama, and add a chann
 The router sends that channel no `Authorization` header, and it does not use another channel's key there. A channel
 without a key on any other address is refused when the config is loaded. `JEV_BASE_URL=http://127.0.0.1:11434` alone
 is the same shortcut, in front of the configured channels. `JEV_MODEL` picks the model; otherwise it is `nimble`.
-Set `JEV_API_KEY` as well only when that server expects one. The key is then sent to that host, as for any hosted channel.
+Without `JEV_API_KEY`, a `JEV_BASE_URL` on any other address is ignored, and `jev-router doctor` says so. A channel
+with a key is a hosted System One server even on loopback: it gets the key and the structured criteria. Give Ollama no key.
+The router calls a loopback channel directly, never through `HTTP_PROXY`, so the routing state stays on the machine.
+
+The default budget, 1,200 ms per channel and 2,500 ms for the whole decision (`jev.deadlineMs`), fits a model that is
+already in memory. Loading one takes longer, and Ollama cancels a load when the caller hangs up, so a cold model may
+never finish loading inside it. Until it does, each decision fails and the session keeps `defaultTier`. Keep the model
+loaded (`OLLAMA_KEEP_ALIVE=-1` on the Ollama server, then one call such as
+`curl http://127.0.0.1:11434/api/generate -d '{"model":"nimble"}'`), or raise the channel's `timeoutMs` and
+`jev.deadlineMs`.
 
 Ollama answers `choice` and `noul`, which are the questions the router asks, and `score`, which it does not. A question
 type the server does not support fails the decision the way a failed Jev call does: the session keeps `defaultTier`.
@@ -546,8 +555,8 @@ after you measure that model. A field you leave out falls back to `policy`, whic
 that answered is the route log's `jev.model`.
 
 `jev-router doctor` lists the local channel. `jev-router doctor --live` makes one call and reports whether it answered,
-and which model did. Setup still asks for a hosted Jev key when a channel has a `keyEnv`. A config whose every channel
-is local has no key for setup to check.
+and which model did. Setup asks for a hosted Jev key when a channel has a `keyEnv`. For a config whose every channel is
+local it asks for no Jev key.
 
 ## Security and privacy
 
@@ -660,7 +669,7 @@ kit, and later the npm package. [docs/releasing.md](docs/releasing.md) has the s
 
 ## Status
 
-The current release is 1.6.0. The offline suite has 180 tests against mock upstreams and a mock Jev, and the package
+The current release is 1.6.0. The offline suite has 182 tests against mock upstreams and a mock Jev, and the package
 smoke test installs the packed package and runs it the way a user would.
 
 Live checks on 2026-09-24 ran Claude Code 2.1.281 through the router against Anthropic and found six problems, listed

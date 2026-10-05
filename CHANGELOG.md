@@ -12,8 +12,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - A System One channel on a loopback address (`127.0.0.0/8`, `::1` or `localhost`) can omit `keyEnv`. The router calls
   it with no `Authorization` header, so a local Ollama 0.35 server (`POST /v1/systemone`, models such as `nimble` and
   `tev1`) can decide a tier with no API key. A keyless channel on any other host is refused when the config loads.
-  `JEV_BASE_URL` alone is that channel when the host is loopback; `JEV_MODEL` defaults to `nimble` there. No configured
-  key is sent to a keyless channel. The model that answered is the route log's `jev.model`.
+  `JEV_BASE_URL` alone is that channel when the host is loopback; `JEV_MODEL` defaults to `nimble` there. On any
+  other host it is ignored, and `doctor` warns. No configured key is sent to a keyless channel. The model that answered
+  is the route log's `jev.model`.
+- Every loopback Jev channel is called directly, not through `HTTP_PROXY` when `NODE_USE_ENV_PROXY=1` is set, so the
+  routing state sent to a local model stays on the machine. An injected `fetchImpl` is still used for every channel.
+- `jev-router setup` works with a config whose Jev channels are all local: it asks for no Jev key, with or without
+  `--yes`.
 - `jev.channels[].thresholds` overrides `policy.accept`, `policy.sensitiveOverride` and `policy.claimGuard` for that
   channel. The packaged policy stays a starting point for Jev. It is not a calibration for nimble or tev1, and a field
   left unset falls back to it on purpose.
