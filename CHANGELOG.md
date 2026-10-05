@@ -7,6 +7,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- A System One channel on a loopback address (`127.0.0.0/8`, `::1` or `localhost`) can omit `keyEnv`. The router calls
+  it with no `Authorization` header, so a local Ollama 0.35 server (`POST /v1/systemone`, models such as `nimble` and
+  `tev1`) can decide a tier with no API key. A keyless channel on any other host is refused when the config loads.
+  `JEV_BASE_URL` alone is that channel when the host is loopback; `JEV_MODEL` defaults to `nimble` there. No configured
+  key is sent to a keyless channel. The model that answered is the route log's `jev.model`.
+- `jev.channels[].thresholds` overrides `policy.accept`, `policy.sensitiveOverride` and `policy.claimGuard` for that
+  channel. The packaged policy stays a starting point for Jev. It is not a calibration for nimble or tev1, and a field
+  left unset falls back to it on purpose.
+- For a local channel, choice criteria are written out as the description strings Ollama requires. A question type
+  outside Ollama's `choice`, `noul` and `score` fails the decision the way a failed Jev call does, and the session
+  keeps `defaultTier`. `jev-router doctor` reports the local channel; `doctor --live` reports whether it answered.
+
 ## [1.6.0] - 2026-09-25
 
 Fable 5.1 can take Claude Code's hardest work now. Setup offers a third choice of models, Claude with Fable 5.1, which

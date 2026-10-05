@@ -480,7 +480,7 @@ release or an earlier one, and keeps any other. `jev-router init` writes one wit
 | `policy.escalationCeiling` | The most capable tier that the step up after a missed bar can reach; unset, the top tier. The Fable config sets `frontier` |
 | `policy.sensitiveOverride`, `policy.claimGuard` | Guard thresholds |
 | `policy.maxProvisional`, `policy.idleResetMinutes`, `policy.failClosed` | Retries after Jev failures, the idle reset, and whether unvetted sessions use trusted targets |
-| `jev.channels` | Ordered System One channels, each with `baseUrl`, `model` (pin a version such as `jev-1.13.0`), `keyEnv` and `timeoutMs` |
+| `jev.channels` | Ordered System One channels, each with `baseUrl`, `model` (pin a version such as `jev-1.13.0`) and `timeoutMs`. `keyEnv` is required off loopback. `thresholds` replaces the policy's probabilities for that channel |
 | `jev.deadlineMs`, `jev.requestChars` | The total Jev budget per decision, and the size cap for the latest message |
 | `jev.question`, `jev.options` | The rubric: one choice question with `what`, `examples` and `not_for` per option, and each option's `tier` |
 | `surfaces.<anthropic\|openai>.<tier\|side\|trusted>` | Targets: `url`, `model`, `auth` (`x-api-key` or `bearer`), `keyEnv`, `clientAuth`, `trusted`, `countTokens`, `omit`, `maxOutputTokens`, `foldSystemMessages`, `omitBetas` |
@@ -517,7 +517,37 @@ writes:
 | `JEV_ROUTER_TIER` | Pin every session to one tier |
 | `JEV_ROUTER_CLAUDE_BIN`, `JEV_ROUTER_CODEX_BIN` | The `claude` and `codex` binaries `launch` runs |
 | `JEV_ROUTER_SETUP_WAIT` | How many seconds setup waits for the service's router to answer (15) |
-| `JEV_BASE_URL`, `JEV_MODEL`, `JEV_API_KEY` | Add an extra System One channel in front of the configured ones |
+| `JEV_BASE_URL`, `JEV_MODEL`, `JEV_API_KEY` | Add an extra System One channel in front of the configured ones. A loopback `JEV_BASE_URL` needs no key |
+
+## Local decision model (Ollama)
+
+A channel can point at a decision model on this machine. [Ollama](https://ollama.com) 0.35 or newer serves
+`POST /v1/systemone`, the same call the router makes to Jev. Nothing leaves the machine, and there is no key and no
+per-token bill. Pull `nimble` (9B) or `tev1` (4B), start Ollama, and add a channel on a loopback address. Leave out
+`keyEnv`:
+
+```json
+{ "name": "ollama", "baseUrl": "http://127.0.0.1:11434", "model": "nimble" }
+```
+
+The router sends that channel no `Authorization` header, and it does not use another channel's key there. A channel
+without a key on any other address is refused when the config is loaded. `JEV_BASE_URL=http://127.0.0.1:11434` alone
+is the same shortcut, in front of the configured channels. `JEV_MODEL` picks the model; otherwise it is `nimble`.
+Set `JEV_API_KEY` as well only when that server expects one. The key is then sent to that host, as for any hosted channel.
+
+Ollama answers `choice` and `noul`, which are the questions the router asks, and `score`, which it does not. A question
+type the server does not support fails the decision the way a failed Jev call does: the session keeps `defaultTier`.
+Ollama wants each choice option described by a string. For a local channel the router writes the rubric's `what`,
+`examples` and `not_for` into that string. TypeSafe and OpenRouter still get the structured criterion.
+
+The probabilities in `policy` were chosen for Jev. They do not carry over to nimble or tev1, and this router does not
+reuse them as if they did. Set `thresholds` on the channel (`accept` per tier, `sensitiveOverride`, `claimGuard`)
+after you measure that model. A field you leave out falls back to `policy`, which is only a starting point. The model
+that answered is the route log's `jev.model`.
+
+`jev-router doctor` lists the local channel. `jev-router doctor --live` makes one call and reports whether it answered,
+and which model did. Setup still asks for a hosted Jev key when a channel has a `keyEnv`. A config whose every channel
+is local has no key for setup to check.
 
 ## Security and privacy
 
@@ -630,7 +660,7 @@ kit, and later the npm package. [docs/releasing.md](docs/releasing.md) has the s
 
 ## Status
 
-The current release is 1.6.0. The offline suite has 176 tests against mock upstreams and a mock Jev, and the package
+The current release is 1.6.0. The offline suite has 180 tests against mock upstreams and a mock Jev, and the package
 smoke test installs the packed package and runs it the way a user would.
 
 Live checks on 2026-09-24 ran Claude Code 2.1.281 through the router against Anthropic and found six problems, listed

@@ -1,6 +1,6 @@
 <!-- FOR AI AGENTS - Human readability is a side effect, not a goal -->
 <!-- Managed by agent: keep sections and order; edit content, not structure -->
-<!-- Last updated: 2026-09-25 | Last verified: 2026-09-25 -->
+<!-- Last updated: 2026-10-05 | Last verified: 2026-10-05 -->
 
 # AGENTS.md
 
@@ -169,6 +169,7 @@ network.
 | Codex: `wire_api = "responses"` only, `session-id` and `thread-id` headers, `x-openai-subagent`, `prompt_cache_key`, `store: false` | openai/codex source at `rust-v0.156.1` | `sessionKey`, `requestKind` |
 | Codex model catalog (`model_catalog_json`) and `base_instructions` | openai/codex `rust-v0.156.1` | `examples/codex/jev-models.json` |
 | System One API: `POST {base}/v1/systemone`, bearer key, `{model, state, questions}`, answers with `choice`, `probabilities`, `noul` | docs.typesafe.ai/api; OpenRouter `/api/v1/systemone` | `JevClient` in `src/jev.mjs` |
+| Ollama local System One, 0.35+: the same path, no key on loopback. Question types `choice`, `noul` and `score`. Choice criteria are description strings (or null), not the structured objects TypeSafe accepts. A string `error` is the failure message | docs.ollama.com/api/systemone; live check against Ollama 0.35.1 on 2026-10-05 | `prepareQuestions` and `httpFailure` in `src/jev.mjs` |
 | Ollama Cloud serves `/v1/messages` and stateless `/v1/responses`, accepts only a bearer key, has no `count_tokens` | docs.ollama.com | `auth: "bearer"`, `countTokens: false` |
 | Haiku 4.5 rejects adaptive `thinking`, `output_config.effort`, and `context_management` without thinking; `max_tokens` above 64000; `role: "system"` messages inside `messages`; and, on a subscription login, the 1M-context beta | live check, 2026-09-24 | `omit` on each Haiku 4.5 target; `OUTPUT_LIMITS`, `NATIVE_SYSTEM_MESSAGES` and `REJECTED_BETAS` in `src/router.mjs` |
 | Node's `process.loadEnvFile` keeps variables that are already set, reports a file it may not read as missing, and Node reads proxy settings (`NODE_USE_ENV_PROXY`, `HTTPS_PROXY`) only at startup | Node 22.22, 2026-09-25; `test/cli.test.mjs` | `loadEnvFile` in `src/envfile.mjs` checks read access first, and warns when an env file sets them |
