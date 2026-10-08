@@ -530,7 +530,7 @@ upstreams. Pull `nimble` (9B) or `tev1` (4B), start Ollama, and add a channel on
 `keyEnv`:
 
 ```json
-{ "name": "ollama", "baseUrl": "http://127.0.0.1:11434", "model": "nimble", "keepAlive": "10m" }
+{ "name": "ollama", "baseUrl": "http://127.0.0.1:11434", "model": "nimble" }
 ```
 
 The router sends that channel no `Authorization` header, and it does not use another channel's key there. A channel
@@ -547,9 +547,10 @@ on every keyless loopback channel, including a keyless `JEV_BASE_URL`. Turns ski
 including after residency expires, and the next channel decides until it answers. With no other channel, a new session
 gets `defaultTier` and an ongoing one keeps its tier. A successful decision renews the residency.
 
-Set `"keepAlive": false` for a local System One server that is not Ollama and has no `/api/generate`. That channel
-gets no warm-up, so a cold model there needs a longer `timeoutMs` and `jev.deadlineMs`.
-See [configuration](docs/configuration.md) for accepted values, health states and failure behavior.
+Set `"keepAlive": false` for a local System One server that is not Ollama and has no `/api/generate`. A keyless
+`JEV_BASE_URL` can't take it, so configure that server as a channel instead. That channel gets no warm-up, so a cold
+model there needs a longer `timeoutMs` and `jev.deadlineMs`. See [configuration](docs/configuration.md) for accepted
+values, health states and failure behavior.
 
 Ollama answers `choice` and `noul`, which are the questions the router asks, and `score`, which it does not. A question
 type the server does not support fails the channel the way a failed Jev call does: the next channel decides, and when

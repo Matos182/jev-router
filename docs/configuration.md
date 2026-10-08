@@ -187,10 +187,11 @@ criterion. The model id in the answer is the one the server returns, or the chan
 It is stored on the route log's `jev.model`.
 
 A keyless loopback channel warms with `keepAlive: "10m"` unless the config says otherwise, so a cold Ollama model loads
-outside the decision budget. A keyless `JEV_BASE_URL` gets the same default. Set another duration to change it:
+outside the decision budget. A keyless `JEV_BASE_URL` always gets that default; to change it, configure the channel
+instead. Set another duration on a channel to change it:
 
 ```json
-{ "name": "ollama", "baseUrl": "http://127.0.0.1:11434", "model": "nimble", "keepAlive": "10m" }
+{ "name": "ollama", "baseUrl": "http://127.0.0.1:11434", "model": "nimble", "keepAlive": "30m" }
 ```
 
 Durations use Go units: `ns`, `us` (also `µs` or `μs`), `ms`, `s`, `m` and `h`, including fractions and compounds
@@ -203,16 +204,18 @@ after a config reload. Each channel has at most one load in flight, with a separ
 Ollama's own load timeout. Request cancellation does not abort it. Shutdown aborts it, and a reload aborts the old
 client's loads after the new client has started its own.
 
-Every decision sends `keep_alive`. A successful load or decision renews the tracked residency. The router treats
-it as expired two seconds early (or 10% early for durations shorter than 20 seconds), to allow the next request
-to reach Ollama. On the next turn, an expired channel starts another load and is skipped immediately.
-While loading, turns try the next channel, or keep `defaultTier` when none answers.
+Every decision on a warming channel sends `keep_alive`. A successful load or decision renews the tracked residency. The
+router treats it as expired two seconds early (or 10% early for durations shorter than 20 seconds), to allow the next
+request to reach Ollama. On the next turn, an expired channel starts another load and is skipped immediately. While
+loading, turns try the next channel, or keep `defaultTier` when none answers.
 
-A decision timeout also starts a load, and opens the usual 30-second breaker. A load slower than `timeoutMs`
-shows the model was cold, so it clears the breaker. A faster one shows the model was resident and the channel is
-slow, so the breaker stays open. A failed load opens the breaker; the next successful load clears it. A channel
-with `keepAlive: false` keeps the plain timeout and breaker behavior: use it for a local System One server that is not
-Ollama and has no `/api/generate`. Hosted payloads do not change.
+A decision timeout also starts a load, and opens the usual 30-second breaker. A load slower than `timeoutMs` shows the
+model was cold, so it clears the breaker. A faster one shows the model was resident and the channel is slow, so the
+breaker stays open. A failed load opens the breaker; the next successful load clears it. After a failed load the router
+stops tracking residency, so decisions keep the channel answering and expiry starts no new load; only a decision timeout
+or a reload tries again. A channel with `keepAlive: false` keeps the plain timeout and breaker behavior: use it for a
+local System One server that is not Ollama and has no `/api/generate`, which otherwise costs one failed load and 30
+seconds of breaker at start and after each reload. Hosted payloads do not change.
 
 `/healthz` reports `warmup` per warming channel: `idle` before its first load or successful decision, `warming`
 during a load, `warm` within the tracked residency, `cold` after expiry, or `failed` after a failed load.

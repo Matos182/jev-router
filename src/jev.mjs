@@ -410,6 +410,8 @@ export class JevClient {
     } catch (err) {
       if (!this.closed) {
         stat.warmup = 'failed';
+        // Forget the residency, so expiry doesn't keep asking for a load this server may never do.
+        ch.residentUntil = undefined;
         stat.errors += 1;
         stat.lastError = `warm-up: ${err instanceof Error ? err.message : String(err)}`;
         stat.openUntil = this.now() + 30000;
@@ -426,7 +428,8 @@ export class JevClient {
    * @param {ChannelStats} stat
    */
   #renew(ch, stat) {
-    if (ch.keepAliveMs === undefined) return;
+    // A decision proves the server answers, not that it loads models: a failed warm-up stays failed.
+    if (ch.keepAliveMs === undefined || stat.warmup === 'failed') return;
     const margin = Math.min(RESIDENCY_MARGIN_MS, ch.keepAliveMs / 10);
     ch.residentUntil = this.now() + ch.keepAliveMs - margin;
     if (!this.warmups.has(ch.name)) stat.warmup = 'warm';

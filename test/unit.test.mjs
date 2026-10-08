@@ -1063,15 +1063,22 @@ const localJev = (keepAlive = '10m') => ({
 });
 
 test('a keyless loopback channel without keepAlive warms for 10m, and so does a keyless JEV_BASE_URL', async () => {
+  let now = 1000;
   const jev = localJev();
   delete jev.channels[0].keepAlive;
-  const { client, calls } = scripted({ localhost: [() => reply(200, {})] }, { jev });
+  const { client, calls } = scripted({ localhost: [() => reply(200, {})] }, { jev, now: () => now });
   await client.warm();
   assert.equal(calls.length, 1);
   assert.equal(calls[0]?.host, 'localhost');
   assert.deepEqual(JSON.parse(String(calls[0]?.init.body)), { model: 'nimble', keep_alive: '10m' });
   assert.equal(client.health().local.warmup, 'warm');
+  now += 600000;
+  assert.equal(client.health().local.warmup, 'cold', 'the default residency expires after 10 minutes');
   client.close();
+  const keyed = scripted({}, { env: { JEV_BASE_URL: 'http://127.0.0.1:11435', JEV_API_KEY: 'k' } });
+  await keyed.client.warm();
+  assert.equal(keyed.calls.length, 0, 'a JEV_BASE_URL with a key is hosted and never warms');
+  keyed.client.close();
   const env = scripted({ '127.0.0.1:11435': [() => reply(200, {})] }, { env: { JEV_BASE_URL: 'http://127.0.0.1:11435' } });
   await env.client.warm();
   assert.deepEqual(JSON.parse(String(env.calls[0]?.init.body)), { model: 'nimble', keep_alive: '10m' });
@@ -1284,6 +1291,25 @@ test('after a timeout, only a load slower than timeoutMs clears the breaker', as
     assert.equal(client.health().local.open, open);
     client.close();
   }
+});
+
+test('after a failed load, decisions keep the channel answering and expiry starts no new load', async (t) => {
+  let now = 1000;
+  const { client, calls } = scripted(
+    { localhost: [() => reply(404, { error: 'not found' }), () => good(), () => good()] },
+    { jev: localJev(), now: () => now },
+  );
+  t.after(() => client.close());
+  await client.warm();
+  assert.equal(client.health().local.warmup, 'failed');
+  now += 30000;
+  const first = await client.decide(stateOf('Add a test'));
+  assert.ok(first.ok && first.channel === 'local');
+  assert.equal(client.health().local.warmup, 'failed', 'a decision does not prove the server loads models');
+  now += 600000;
+  const later = await client.decide(stateOf('Add a test'));
+  assert.ok(later.ok && later.channel === 'local', 'expiry does not send the channel back to a failing load');
+  assert.equal(calls.filter((call) => call.host === 'localhost').length, 3);
 });
 
 test('failed warm-ups open the breaker and a later successful warm-up clears it', async () => {
