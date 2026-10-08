@@ -1071,7 +1071,7 @@ function upstreamHeaders(req, target, env) {
   const key = target.keyEnv ? env[target.keyEnv] : undefined;
   if (key && target.auth === 'bearer') headers.authorization = `Bearer ${key}`;
   else if (key) headers['x-api-key'] = key;
-  else if (target.clientAuth && target.trusted) {
+  else if (target.clientAuth === true && target.trusted === true) {
     // no router key: pass the client's own login (for example claude.ai) to its provider only
     for (const name of CLIENT_LOGIN) if (req.headers[name]) headers[name] = req.headers[name];
   }

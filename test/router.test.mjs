@@ -318,15 +318,26 @@ test('a client login reaches only a trusted clientAuth target without a router k
   delete fast.keyEnv;
   fast.clientAuth = true;
   const { url } = await startRouter({ cfg });
-  const login = { authorization: 'Bearer chatgpt-login', 'chatgpt-account-id': 'acct-1' };
+  const login = { authorization: 'Bearer chatgpt-login', 'x-api-key': 'client-key', 'chatgpt-account-id': 'acct-1' };
   const body = codexBody('t-login', 'Design the zero-downtime migration for the orders table.');
   const untrusted = await delta(() => post(url, '/v1/responses', body, codexHeaders('t-login', { ...login, 'x-jev-tier': 'fast' })));
   const up = untrusted.ollama[0];
   assert.equal(up.headers.authorization, undefined, 'clientAuth without trusted never gets the login');
   assert.equal(up.headers['chatgpt-account-id'], undefined);
+  assert.equal(up.headers['x-api-key'], undefined);
   const keyed = await delta(() => post(url, '/v1/responses', body, codexHeaders('t-login-2', { ...login, 'x-jev-tier': 'frontier' })));
   assert.equal(keyed.openai[0].headers.authorization, `Bearer ${KEYS.OPENAI_API_KEY}`);
   assert.equal(keyed.openai[0].headers['chatgpt-account-id'], undefined, 'a router key leaves the account header behind');
+  const unset = await startRouter({ cfg: testConfig(), env: { OPENAI_API_KEY: undefined } });
+  const missing = await delta(() =>
+    post(unset.url, '/v1/responses', body, codexHeaders('t-login-3', { ...login, 'x-jev-tier': 'frontier' })),
+  );
+  const bare = missing.openai[0].headers;
+  assert.deepEqual(
+    [bare.authorization, bare['x-api-key'], bare['chatgpt-account-id']],
+    [undefined, undefined, undefined],
+    'a trusted target without clientAuth never gets the login, even with its key unset',
+  );
 });
 
 test('a session ratchets: tool loops never ask Jev, a harder new turn upgrades, an easier one keeps the tier', async () => {

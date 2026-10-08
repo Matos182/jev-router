@@ -525,10 +525,11 @@ writes:
   `127.0.0.1`, `localhost` or `[::1]` on its port (DNS rebinding), any request with an `Origin` header (browser tabs),
   and bodies that aren't JSON. It won't listen on a non-loopback address unless `JEV_ROUTER_TOKEN` is set; clients
   then send the token as `x-jev-router-token`.
-- **Keys stay with their hosts.** Each key comes from the environment variable its target or Jev channel names, and
-  goes only to that host. Upstream redirects are refused, so a key can't follow one. Your Claude login is forwarded
-  only to targets marked `clientAuth` (Anthropic). So that another gateway's credentials never reach Anthropic, setup,
-  `launch claude` and `env claude` won't route Claude Code while it goes to another gateway with credentials for it.
+- **Keys stay with their hosts.** Each key comes from the environment variable its target or Jev channel names, and goes
+  only to that host. Upstream redirects are refused, so a key can't follow one. Your Claude login is forwarded only to
+  targets marked `clientAuth` and `trusted` whose key isn't set (Anthropic). So that another gateway's credentials never
+  reach Anthropic, setup, `launch claude` and `env claude` won't route Claude Code while it goes to another gateway with
+  credentials for it.
 - **Keys at rest.** Setup saves them in `~/.config/jev-router/env` with mode 0600, and never prints them. You can
   also keep them in your shell environment. `serve`, `launch`, `env`, `doctor` and `setup` warn when other users can
   read or change the env file. `launch` keeps the file's variables out of the agent's environment, so the commands the

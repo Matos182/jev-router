@@ -63,7 +63,7 @@ time for the fix before you disclose the issue publicly.
 - `launch` keeps the env file's variables out of the agent's environment, so the commands Claude Code or Codex runs,
   and the tool output an untrusted upstream receives, don't carry the router's keys.
 - The client's own credential, such as a Claude login, is forwarded only to targets marked `clientAuth`
-  (Anthropic in the packaged configs).
+  and `trusted` whose key isn't set (Anthropic in the packaged configs).
 - So that another gateway's credentials never reach Anthropic, `jev-router setup`, `launch claude` and `env claude`
   won't route Claude Code while it goes to another gateway (`ANTHROPIC_BASE_URL`) with credentials for it:
   `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, custom headers other than the router token, or an `apiKeyHelper`. They

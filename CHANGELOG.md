@@ -17,8 +17,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Changed
 
 - A client's login (`authorization`, `x-api-key`, `chatgpt-account-id`) reaches a target only when it sets
-  `clientAuth` and `trusted` and the router holds no key for it. A target with `clientAuth` but not `trusted` now stops
-  the router at startup with `….clientAuth needs trusted`.
+  `clientAuth` and `trusted` and the router holds no key for it. **Breaking:** a target with `clientAuth` but not
+  `trusted`, which used to forward the login, now stops the router at startup with `….clientAuth needs trusted`, and
+  `clientAuth` must be `true` or `false`.
 
 ## [1.6.0] - 2026-09-25
 

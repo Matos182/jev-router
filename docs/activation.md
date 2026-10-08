@@ -330,7 +330,7 @@ requires_openai_auth = true
 ```
 
 The router forwards the token, and the `ChatGPT-Account-ID` header with it, only to targets with `clientAuth` and
-`trusted` and no `keyEnv`. Ollama Cloud tiers keep their own key and get only content headers, so the login never
+`trusted` whose key isn't set. Ollama Cloud tiers keep their own key and get only content headers, so the login never
 leaves for another provider. Use a model your plan offers; `~/.codex/models_cache.json` lists them.
 
 `jev-router launch codex --force` rewrites the profile and drops that line, so add it again after one. The token
