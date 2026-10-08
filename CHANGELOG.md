@@ -14,6 +14,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   `https://chatgpt.com/backend-api/codex` with `clientAuth`, `trusted` and `"stripPath": "/v1"`, and
   `requires_openai_auth = true` in the Codex profile. See [Codex on a ChatGPT login](docs/activation.md#codex-on-a-chatgpt-login).
 
+### Changed
+
+- A client's login (`authorization`, `x-api-key`, `chatgpt-account-id`) reaches a target only when it sets
+  `clientAuth` and `trusted` and the router holds no key for it. A target with `clientAuth` but not `trusted` now stops
+  the router at startup with `….clientAuth needs trusted`.
+
 ## [1.6.0] - 2026-09-25
 
 Fable 5.1 can take Claude Code's hardest work now. Setup offers a third choice of models, Claude with Fable 5.1, which

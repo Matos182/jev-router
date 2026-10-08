@@ -213,6 +213,7 @@ function checkTarget(target, where, need) {
   need(typeof target.model === 'string' && target.model, `${where}.model is required`);
   need(AUTH.has(target.auth), `${where}.auth must be "x-api-key" or "bearer"`);
   need(target.keyEnv || target.clientAuth, `${where} needs keyEnv or clientAuth`);
+  need(!target.clientAuth || target.trusted === true, `${where}.clientAuth needs trusted`);
   need(
     target.stripPath === undefined || (typeof target.stripPath === 'string' && /^\/(?!\.+$)[\w.~-]+$/.test(target.stripPath)),
     `${where}.stripPath must be a path prefix such as "/v1"`,

@@ -536,6 +536,7 @@ test('config validation names each kind of problem', () => {
     [(c) => (c.surfaces.openai.frontier.url = 'not a url'), /surfaces\.openai\.frontier\.url must be an http\(s\) URL/],
     [(c) => (c.surfaces.openai.frontier.model = ''), /surfaces\.openai\.frontier\.model is required/],
     [(c) => delete c.surfaces.openai.frontier.keyEnv, /surfaces\.openai\.frontier needs keyEnv or clientAuth/],
+    [(c) => (c.surfaces.openai.fast.clientAuth = true), /surfaces\.openai\.fast\.clientAuth needs trusted/],
     [(c) => (c.surfaces.openai.frontier.stripPath = 'v1'), /surfaces\.openai\.frontier\.stripPath must be a path prefix/],
     [(c) => (c.surfaces.openai.frontier.stripPath = '/v1/'), /surfaces\.openai\.frontier\.stripPath must be a path prefix/],
     [(c) => (c.surfaces.openai.frontier.stripPath = '/..'), /surfaces\.openai\.frontier\.stripPath must be a path prefix/],

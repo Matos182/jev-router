@@ -198,7 +198,7 @@ without a `trusted` target marked `"trusted": true`.
 | `model` | yes | A non-empty string | The model name written into the forwarded request |
 | `auth` | yes | `"x-api-key"` or `"bearer"` | How the router sends its key |
 | `keyEnv` | this or `clientAuth` | none | Environment variable that holds the key for this target |
-| `clientAuth` | this or `keyEnv` | none | When the router has no key for this target, forward the client's own `authorization` or `x-api-key` header. Use it only for a first-party provider: Anthropic, to keep a Claude login working, or ChatGPT's Codex backend, to keep a ChatGPT login working |
+| `clientAuth` | this or `keyEnv` | none | Needs `trusted`. When the router has no key for this target, forward the client's own `authorization`, `x-api-key` and `chatgpt-account-id` headers. Use it only for a first-party provider: Anthropic, to keep a Claude login working, or ChatGPT's Codex backend, to keep a ChatGPT login working |
 | `trusted` | no | none | Trusted with secrets and with the client's full headers |
 | `countTokens` | no | none | `false` answers `count_tokens` with a local 404 instead of forwarding the prompt to a counter with another tokenizer |
 | `omit` | no | A list of strings | Fields to delete from the request body before forwarding. Dotted paths reach nested fields, for example `output_config.effort` |
@@ -347,7 +347,7 @@ Invalid router config:
 | `jev.channels` | `jev.channels must be an array`, `jev.channels[i] must be an object`, `jev.channels[i].name is required`, `….baseUrl must be an http(s) URL`, `….model is required`, `….keyEnv is required`, `….timeoutMs must be a whole number of milliseconds above 0` |
 | `jev.question`, `jev.options` | `jev.question is required`, `jev.options needs at least two options`, `jev.options.<name>.tier must be one of tiers` |
 | `surfaces` | `surfaces is required`, `surfaces.<surface> has no target for tier "…"`, `surfaces.<surface> routes some tiers to untrusted upstreams, so it needs a trusted target marked "trusted": true` |
-| Targets | `….url must be an http(s) URL`, `….model is required`, `….auth must be "x-api-key" or "bearer"`, `… needs keyEnv or clientAuth`, `….stripPath must be a path prefix such as "/v1"`, `….omit must be a list of field paths`, `….maxOutputTokens must be a positive whole number`, `….foldSystemMessages must be true or false`, `….omitBetas must be a list of beta names` |
+| Targets | `….url must be an http(s) URL`, `….model is required`, `….auth must be "x-api-key" or "bearer"`, `… needs keyEnv or clientAuth`, `….clientAuth needs trusted`, `….stripPath must be a path prefix such as "/v1"`, `….omit must be a list of field paths`, `….maxOutputTokens must be a positive whole number`, `….foldSystemMessages must be true or false`, `….omitBetas must be a list of beta names` |
 | `modelPins` | `modelPins.<family> must be one of tiers` |
 
 Several of these checks catch values that would otherwise break routing much later. A `sideCallModel` of `"("` would
