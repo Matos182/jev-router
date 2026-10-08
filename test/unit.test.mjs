@@ -1072,7 +1072,9 @@ test('a keyless loopback channel without keepAlive warms for 10m, and so does a 
   assert.equal(calls[0]?.host, 'localhost');
   assert.deepEqual(JSON.parse(String(calls[0]?.init.body)), { model: 'nimble', keep_alive: '10m' });
   assert.equal(client.health().local.warmup, 'warm');
-  now += 600000;
+  now += 597000;
+  assert.equal(client.health().local.warmup, 'warm', 'the default residency lasts 10 minutes');
+  now += 3000;
   assert.equal(client.health().local.warmup, 'cold', 'the default residency expires after 10 minutes');
   client.close();
   const keyed = scripted({}, { env: { JEV_BASE_URL: 'http://127.0.0.1:11435', JEV_API_KEY: 'k' } });
@@ -1317,6 +1319,24 @@ test('after a failed load, decisions keep the channel answering and expiry start
   now += 600000;
   const later = await client.decide(stateOf('Add a test'));
   assert.ok(later.ok && later.channel === 'local', 'expiry does not send the channel back to a failing load');
+  assert.equal(calls.filter((call) => call.host === 'localhost').length, 3);
+});
+
+test('a failed reload after a warm-up clears residency, so the next decision answers and starts no load', async (t) => {
+  let now = 1000;
+  const { client, calls } = scripted(
+    { localhost: [() => reply(200, {}), () => reply(404, { error: 'not found' }), () => good()] },
+    { jev: localJev(), now: () => now },
+  );
+  t.after(() => client.close());
+  await client.warm();
+  assert.equal(client.health().local.warmup, 'warm');
+  now += 600000;
+  await client.warm();
+  assert.equal(client.health().local.warmup, 'failed');
+  now += 31000;
+  const answer = await client.decide(stateOf('Add a test'));
+  assert.ok(answer.ok && answer.channel === 'local', 'an expired residency from before the failure does not skip the channel');
   assert.equal(calls.filter((call) => call.host === 'localhost').length, 3);
 });
 
