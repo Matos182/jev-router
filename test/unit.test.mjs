@@ -1048,7 +1048,7 @@ test('keepAlive takes durations Ollama accepts, from 1 second up, only on keyles
     assert.equal(validateConfig(config(value)).jev.channels[0].keepAlive, value);
   for (const value of ['', ' ', 'banana', '10', '-1', null, true, Infinity])
     assert.throws(() => validateConfig(config(value)), /keepAlive must be a duration with units, such as "10m", or a number of seconds/);
-  for (const value of [0, '0s', '-0m', 0.5, '999ms', '2562048h', 9.3e15])
+  for (const value of [0, '0s', '-0m', 0.5, '999ms', '2562048h', '-2562048h', 9.3e15])
     assert.throws(() => validateConfig(config(value)), /keepAlive must be from 1 second to 2562047h, or negative to keep the model loaded/);
   assert.equal(validateConfig(config(false)).jev.channels[0].keepAlive, false, 'false turns the default warm-up off');
   for (const extra of [{ keyEnv: 'KEY' }, { baseUrl: 'https://remote.invalid', keyEnv: 'KEY' }])

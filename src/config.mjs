@@ -216,8 +216,11 @@ function checkKeepAlive(ch, i, need) {
   if (ch.keepAlive === false) return;
   const duration = parseKeepAlive(ch.keepAlive);
   need(duration !== undefined, `jev.channels[${i}].keepAlive must be a duration with units, such as "10m", or a number of seconds`);
+  // A negative string still goes through time.ParseDuration, so its size has to fit a Go duration too.
+  const magnitude = typeof ch.keepAlive === 'string' ? parseKeepAlive(ch.keepAlive.replace(/^-/, '')) : 0;
   need(
-    duration === undefined || duration === Infinity || (duration >= 1000 && duration <= MAX_KEEP_ALIVE_MS),
+    duration === undefined ||
+      (duration === Infinity ? (magnitude ?? 0) <= MAX_KEEP_ALIVE_MS : duration >= 1000 && duration <= MAX_KEEP_ALIVE_MS),
     `jev.channels[${i}].keepAlive must be from 1 second to 2562047h, or negative to keep the model loaded`,
   );
 }
