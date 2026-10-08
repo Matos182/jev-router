@@ -115,8 +115,11 @@ export interface JevChannel {
    */
   keyEnv?: string;
   timeoutMs: number;
-  /** Ollama model residency: a nonzero duration string or seconds; negative means forever. Keyless loopback only. */
-  keepAlive?: string | number;
+  /**
+   * Ollama model residency: a nonzero duration string or seconds; negative means forever. Keyless loopback only.
+   * Unset on a keyless loopback channel means "10m"; `false` turns the warm-up off.
+   */
+  keepAlive?: string | number | false;
   /** This channel's probability thresholds. Unset fields use `policy`, which was chosen for Jev. */
   thresholds?: ChannelThresholds;
 }

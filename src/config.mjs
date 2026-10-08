@@ -185,15 +185,7 @@ function checkJev(input, tiers, need) {
     } else need(typeof ch.keyEnv === 'string' && ch.keyEnv, keyEnvMessage(i));
     // Anything else fails every Jev call, before it is made.
     need(isCount(ch.timeoutMs, 1), `jev.channels[${i}].timeoutMs must be a whole number of milliseconds above 0`);
-    if (ch.keepAlive !== undefined) {
-      need(!ch.keyEnv && isLoopbackBaseUrl(ch.baseUrl), `jev.channels[${i}].keepAlive is only allowed on a keyless loopback channel`);
-      const duration = parseKeepAlive(ch.keepAlive);
-      need(duration !== undefined, `jev.channels[${i}].keepAlive must be a duration with units, such as "10m", or a number of seconds`);
-      need(
-        duration === undefined || duration === Infinity || (duration >= 1000 && duration <= MAX_KEEP_ALIVE_MS),
-        `jev.channels[${i}].keepAlive must be from 1 second to 2562047h, or negative to keep the model loaded`,
-      );
-    }
+    checkKeepAlive(ch, i, need);
     checkThresholds(ch.thresholds, i, tiers, need);
   }
   need(typeof jev.question === 'string' && jev.question.length > 0, 'jev.question is required');
@@ -209,6 +201,25 @@ function checkJev(input, tiers, need) {
  */
 function keyEnvMessage(index) {
   return `jev.channels[${index}].keyEnv is required (a channel without a key is only allowed on a loopback address)`;
+}
+
+/**
+ * `keepAlive` on a channel, when present: keyless loopback only. `false` turns off the default warm-up;
+ * anything else is a duration Ollama accepts.
+ * @param {Partial<JevChannel>} ch
+ * @param {number} i
+ * @param {Need} need
+ */
+function checkKeepAlive(ch, i, need) {
+  if (ch.keepAlive === undefined) return;
+  need(!ch.keyEnv && isLoopbackBaseUrl(ch.baseUrl), `jev.channels[${i}].keepAlive is only allowed on a keyless loopback channel`);
+  if (ch.keepAlive === false) return;
+  const duration = parseKeepAlive(ch.keepAlive);
+  need(duration !== undefined, `jev.channels[${i}].keepAlive must be a duration with units, such as "10m", or a number of seconds`);
+  need(
+    duration === undefined || duration === Infinity || (duration >= 1000 && duration <= MAX_KEEP_ALIVE_MS),
+    `jev.channels[${i}].keepAlive must be from 1 second to 2562047h, or negative to keep the model loaded`,
+  );
 }
 
 /**

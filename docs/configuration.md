@@ -145,7 +145,7 @@ human message, up to `maxProvisional` attempts (`reason: fallback:default`). An 
 | `jev.stripCode` | `true` | `true` or `false` | Accepted, but the router doesn't read it yet: code blocks are always replaced by a one-line summary |
 | `jev.guards` | `true` | `true` or `false` | Ask the two guard questions, `alters_sensitive_state` and `routing_claim_present`, in the same request as the tier question |
 | `jev.channels` | `[]` | An array of objects. Each channel needs a `name`, an http(s) `baseUrl` and a `model`. A `keyEnv` is required unless `baseUrl` is loopback | System One channels, tried in order. A loopback channel with no `keyEnv` is a local decision model |
-| `jev.channels[].keepAlive` | unset | A duration with units such as `"10m"`, or a number of seconds, from 1 second to `2562047h`; negative means forever. Keyless loopback only | Loads the model in the background and sends `keep_alive` with decisions to keep it resident |
+| `jev.channels[].keepAlive` | `"10m"` on a keyless loopback channel | A duration with units such as `"10m"`, or a number of seconds, from 1 second to `2562047h`; negative means forever; `false` turns the warm-up off. Keyless loopback only | Loads the model in the background and sends `keep_alive` with decisions to keep it resident |
 | `jev.channels[].timeoutMs` | `1200` | A whole number above 0 | Timeout for one attempt on this channel |
 | `jev.channels[].thresholds` | the policy's probabilities | `accept` (probabilities keyed by tier), `sensitiveOverride` and `claimGuard`, each a probability from 0 to 1 | Replaces those policy probabilities for answers from this channel. There is no shipped calibration for nimble or tev1 |
 | `jev.question` | none, required | A non-empty string | The instructions of the tier question |
@@ -186,7 +186,8 @@ each choice criterion to be a description string. For a local channel the router
 criterion. The model id in the answer is the one the server returns, or the channel's `model` when the body omits it.
 It is stored on the route log's `jev.model`.
 
-For Ollama, set `keepAlive` on a keyless loopback channel to avoid repeated cold-start timeouts:
+A keyless loopback channel warms with `keepAlive: "10m"` unless the config says otherwise, so a cold Ollama model loads
+outside the decision budget. A keyless `JEV_BASE_URL` gets the same default. Set another duration to change it:
 
 ```json
 { "name": "ollama", "baseUrl": "http://127.0.0.1:11434", "model": "nimble", "keepAlive": "10m" }
@@ -209,10 +210,11 @@ While loading, turns try the next channel, or keep `defaultTier` when none answe
 
 A decision timeout also starts a load, and opens the usual 30-second breaker. A load slower than `timeoutMs`
 shows the model was cold, so it clears the breaker. A faster one shows the model was resident and the channel is
-slow, so the breaker stays open. A failed load opens the breaker; the next successful load clears it. Channels
-without `keepAlive` keep their timeout and breaker behavior. Hosted payloads do not change.
+slow, so the breaker stays open. A failed load opens the breaker; the next successful load clears it. A channel
+with `keepAlive: false` keeps the plain timeout and breaker behavior: use it for a local System One server that is not
+Ollama and has no `/api/generate`. Hosted payloads do not change.
 
-`/healthz` reports `warmup` per opted-in channel: `idle` before its first load or successful decision, `warming`
+`/healthz` reports `warmup` per warming channel: `idle` before its first load or successful decision, `warming`
 during a load, `warm` within the tracked residency, `cold` after expiry, or `failed` after a failed load.
 These states estimate residency; they do not query Ollama. `doctor` displays the running router's state without
 loading models. `doctor --live` makes its explicit decision call, without background loads.

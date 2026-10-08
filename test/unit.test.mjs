@@ -1050,14 +1050,32 @@ test('keepAlive takes durations Ollama accepts, from 1 second up, only on keyles
     assert.throws(() => validateConfig(config(value)), /keepAlive must be a duration with units, such as "10m", or a number of seconds/);
   for (const value of [0, '0s', '-0m', 0.5, '999ms', '2562048h', 9.3e15])
     assert.throws(() => validateConfig(config(value)), /keepAlive must be from 1 second to 2562047h, or negative to keep the model loaded/);
+  assert.equal(validateConfig(config(false)).jev.channels[0].keepAlive, false, 'false turns the default warm-up off');
   for (const extra of [{ keyEnv: 'KEY' }, { baseUrl: 'https://remote.invalid', keyEnv: 'KEY' }])
-    assert.throws(() => validateConfig(config('10m', extra)), /keepAlive is only allowed on a keyless loopback channel/);
+    for (const value of ['10m', false])
+      assert.throws(() => validateConfig(config(value, extra)), /keepAlive is only allowed on a keyless loopback channel/);
 });
 
-/** @param {string | number | undefined} [keepAlive] @returns {JevConfig} */
+/** @param {string | number | false | undefined} [keepAlive] @returns {JevConfig} */
 const localJev = (keepAlive = '10m') => ({
   ...JEV,
   channels: [{ name: 'local', baseUrl: 'http://localhost', model: 'nimble', timeoutMs: 20, keepAlive }, ...JEV.channels],
+});
+
+test('a keyless loopback channel without keepAlive warms for 10m, and so does a keyless JEV_BASE_URL', async () => {
+  const jev = localJev();
+  delete jev.channels[0].keepAlive;
+  const { client, calls } = scripted({ localhost: [() => reply(200, {})] }, { jev });
+  await client.warm();
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]?.host, 'localhost');
+  assert.deepEqual(JSON.parse(String(calls[0]?.init.body)), { model: 'nimble', keep_alive: '10m' });
+  assert.equal(client.health().local.warmup, 'warm');
+  client.close();
+  const env = scripted({ '127.0.0.1:11435': [() => reply(200, {})] }, { env: { JEV_BASE_URL: 'http://127.0.0.1:11435' } });
+  await env.client.warm();
+  assert.deepEqual(JSON.parse(String(env.calls[0]?.init.body)), { model: 'nimble', keep_alive: '10m' });
+  env.client.close();
 });
 
 test('expired residency is cold, starts one load and skips decisions until warm again', async (t) => {
@@ -1292,9 +1310,8 @@ test('failed warm-ups open the breaker and a later successful warm-up clears it'
   }
 });
 
-test('warm ignores hosted channels and local channels without keepAlive', async () => {
-  const jev = localJev();
-  delete jev.channels[0].keepAlive;
+test('warm ignores hosted channels and local channels with keepAlive false', async () => {
+  const jev = localJev(false);
   const { client, calls } = scripted({ localhost: [() => good()] }, { jev });
   await client.warm();
   assert.equal(calls.length, 0);

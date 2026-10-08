@@ -9,8 +9,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
-- Optional `jev.channels[].keepAlive` warms keyless local Ollama models at startup and reload, and renews residency
-  on successful decisions. Expired or loading channels are skipped immediately; timeouts start a separate load.
+- `jev.channels[].keepAlive` warms keyless local Ollama models at startup and reload, and renews residency
+  on successful decisions. It defaults to `"10m"` on every keyless loopback channel, a keyless `JEV_BASE_URL`
+  included, because a cold model never loads inside the decision budget. `false` turns the warm-up off. Expired or
+  loading channels are skipped immediately; timeouts start a separate load.
   Health and doctor show residency; negative durations keep it forever, and values Ollama would refuse are refused.
 
 - A System One channel on a loopback address (`127.0.0.0/8`, `::1` or `localhost`) can omit `keyEnv`. The router calls

@@ -480,7 +480,7 @@ release or an earlier one, and keeps any other. `jev-router init` writes one wit
 | `policy.escalationCeiling` | The most capable tier that the step up after a missed bar can reach; unset, the top tier. The Fable config sets `frontier` |
 | `policy.sensitiveOverride`, `policy.claimGuard` | Guard thresholds |
 | `policy.maxProvisional`, `policy.idleResetMinutes`, `policy.failClosed` | Retries after Jev failures, the idle reset, and whether unvetted sessions use trusted targets |
-| `jev.channels` | Ordered System One channels, each with `baseUrl`, `model` (pin a version such as `jev-1.13.0`) and `timeoutMs`. `keyEnv` is required off loopback. `keepAlive` warms keyless local Ollama models and sets residency. `thresholds` replaces the policy's probabilities for that channel |
+| `jev.channels` | Ordered System One channels, each with `baseUrl`, `model` (pin a version such as `jev-1.13.0`) and `timeoutMs`. `keyEnv` is required off loopback. `keepAlive` (default `"10m"` on keyless loopback, `false` to turn off) warms local Ollama models and sets residency. `thresholds` replaces the policy's probabilities for that channel |
 | `jev.deadlineMs`, `jev.requestChars` | The total Jev budget per decision, and the size cap for the latest message |
 | `jev.question`, `jev.options` | The rubric: one choice question with `what`, `examples` and `not_for` per option, and each option's `tier` |
 | `surfaces.<anthropic\|openai>.<tier\|side\|trusted>` | Targets: `url`, `model`, `auth` (`x-api-key` or `bearer`), `keyEnv`, `clientAuth`, `trusted`, `countTokens`, `omit`, `maxOutputTokens`, `foldSystemMessages`, `omitBetas` |
@@ -541,15 +541,14 @@ with a key is a hosted System One server even on loopback: it gets the key and t
 The router calls a loopback channel directly, never through `HTTP_PROXY`, so the routing state stays on the machine.
 
 The default budget, 1,200 ms per channel and 2,500 ms for the whole decision (`jev.deadlineMs`), fits a model that is
-already in memory. Loading one takes longer, and Ollama cancels a load when the caller hangs up, so a cold model may
-never finish loading inside it. Until it does, the channel fails and the next one decides; with no other channel, a new
-session gets `defaultTier` and an ongoing one keeps its tier. Keep the model
-loaded (`OLLAMA_KEEP_ALIVE=-1` on the Ollama server, then one call such as
-`curl http://127.0.0.1:11434/api/generate -d '{"model":"nimble"}'`), or raise the channel's `timeoutMs` and
-`jev.deadlineMs`.
+already in memory. Loading one takes longer, and Ollama cancels a load when the caller hangs up. So the router loads a
+keyless local model in the background, outside that budget, and keeps it resident: `keepAlive` defaults to `"10m"`
+on every keyless loopback channel, including a keyless `JEV_BASE_URL`. Turns skip the channel while it loads,
+including after residency expires, and the next channel decides until it answers. With no other channel, a new session
+gets `defaultTier` and an ongoing one keeps its tier. A successful decision renews the residency.
 
-Optional `keepAlive` loads a keyless local Ollama model in the background and renews its residency on each
-successful decision. Turns skip the channel while it loads, including after residency expires.
+Set `"keepAlive": false` for a local System One server that is not Ollama and has no `/api/generate`. That channel
+gets no warm-up, so a cold model there needs a longer `timeoutMs` and `jev.deadlineMs`.
 See [configuration](docs/configuration.md) for accepted values, health states and failure behavior.
 
 Ollama answers `choice` and `noul`, which are the questions the router asks, and `score`, which it does not. A question

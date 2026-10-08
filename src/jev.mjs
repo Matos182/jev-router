@@ -154,6 +154,8 @@ const RETRYABLE = new Set([408, 429, 500, 502, 503, 504, 529]);
 const WARM_TIMEOUT_MS = 300000;
 // Leave two seconds for the next request to reach Ollama; cap at 10% so short residencies remain useful.
 const RESIDENCY_MARGIN_MS = 2000;
+// A keyless loopback channel warms by default: with no load in the background, a cold model never fits the budget.
+const DEFAULT_KEEP_ALIVE = '10m';
 
 /** Question types Ollama 0.35 documents for `POST /v1/systemone`. Choice and noul are the ones the router asks. */
 const LOCAL_QUESTION_TYPES = new Set(['choice', 'noul', 'score']);
@@ -189,11 +191,13 @@ function liveChannels(jev, env) {
   /** @type {LiveChannel[]} */
   const channels = jev.channels.map((ch) => {
     const local = !ch.keyEnv && isLoopbackBaseUrl(ch.baseUrl);
+    const keepAlive = local && ch.keepAlive !== false ? (ch.keepAlive ?? DEFAULT_KEEP_ALIVE) : undefined;
     return {
       ...ch,
       key: local || !ch.keyEnv ? undefined : env[ch.keyEnv],
       local,
-      keepAliveMs: local ? parseKeepAlive(ch.keepAlive) : undefined,
+      keepAlive,
+      keepAliveMs: keepAlive === undefined ? undefined : parseKeepAlive(keepAlive),
     };
   });
   // JEV_BASE_URL + JEV_API_KEY add a channel in front. That key belongs to this channel; it is never
@@ -215,6 +219,8 @@ function liveChannels(jev, env) {
       key: undefined,
       local: true,
       timeoutMs: 1200,
+      keepAlive: DEFAULT_KEEP_ALIVE,
+      keepAliveMs: parseKeepAlive(DEFAULT_KEEP_ALIVE),
     });
   return channels.filter((ch) => ch.key || ch.local);
 }
