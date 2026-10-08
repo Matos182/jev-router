@@ -1044,7 +1044,7 @@ test('keepAlive takes durations Ollama accepts, from 1 second up, only on keyles
     stateFile: null,
     jev: { ...shipped.jev, channels: [{ name: 'local', baseUrl: 'http://localhost', model: 'nimble', keepAlive, ...extra }] },
   });
-  for (const value of ['10m', '1h', '1s', '1h30m', '2562047h', 600, 1, -1, '-1m'])
+  for (const value of ['10m', '1h', '1s', '1h30m', '2562047h', '-2562047h', 600, 1, -1, '-1m'])
     assert.equal(validateConfig(config(value)).jev.channels[0].keepAlive, value);
   for (const value of ['', ' ', 'banana', '10', '-1', null, true, Infinity])
     assert.throws(() => validateConfig(config(value)), /keepAlive must be a duration with units, such as "10m", or a number of seconds/);
@@ -1079,6 +1079,14 @@ test('a keyless loopback channel without keepAlive warms for 10m, and so does a 
   await keyed.client.warm();
   assert.equal(keyed.calls.length, 0, 'a JEV_BASE_URL with a key is hosted and never warms');
   keyed.client.close();
+  const keyedChannel = {
+    ...JEV,
+    channels: [{ name: 'local', baseUrl: 'http://localhost', model: 'nimble', keyEnv: 'ONE_KEY', timeoutMs: 20 }],
+  };
+  const keyedLocal = scripted({}, { jev: keyedChannel });
+  await keyedLocal.client.warm();
+  assert.equal(keyedLocal.calls.length, 0, 'a keyed loopback channel is hosted and never warms');
+  keyedLocal.client.close();
   const env = scripted({ '127.0.0.1:11435': [() => reply(200, {})] }, { env: { JEV_BASE_URL: 'http://127.0.0.1:11435' } });
   await env.client.warm();
   assert.deepEqual(JSON.parse(String(env.calls[0]?.init.body)), { model: 'nimble', keep_alive: '10m' });
