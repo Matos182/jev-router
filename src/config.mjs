@@ -3,7 +3,8 @@
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 
-// The fields a target's effort writes: omitting one of them as well would throw the effort away.
+// The fields a target's effort writes. Omit runs first and effort writes its field back, so omitting
+// one of them as well would send the effort to an upstream the config says refuses it.
 const EFFORT_FIELDS = new Set(['output_config', 'output_config.effort', 'reasoning', 'reasoning.effort']);
 
 /** @import { Config, Env, JevChannel, JevConfig, Policy, Target } from './types.js' */

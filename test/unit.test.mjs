@@ -515,6 +515,15 @@ test('loadConfig reads and validates a file, and names the file it cannot read',
   assert.equal(loadConfig(new URL(`file://${dir}/ok.json`)).port, 4000, 'a file URL works too');
 });
 
+test('a target with a lowercase effort and no effort field in omit loads', () => {
+  const raw = structuredClone(shipped);
+  Object.assign(raw.surfaces.anthropic.side, { effort: 'high', omit: ['thinking'] });
+  raw.surfaces.openai.frontier.effort = 'xhigh';
+  const cfg = validateConfig({ ...raw, stateFile: null });
+  assert.equal(cfg.surfaces.anthropic?.side.effort, 'high');
+  assert.equal(cfg.surfaces.openai?.frontier.effort, 'xhigh');
+});
+
 test('config validation names each kind of problem', () => {
   /** @type {Array<[(raw: typeof shipped) => void, RegExp]>} */
   const cases = [
@@ -539,6 +548,7 @@ test('config validation names each kind of problem', () => {
     [(c) => (c.surfaces.anthropic.side.omit = 'thinking'), /surfaces\.anthropic\.side\.omit must be a list of field paths/],
     [(c) => (c.surfaces.anthropic.side.effort = 'HIGH'), /surfaces\.anthropic\.side\.effort must be an effort level, such as "high"/],
     [(c) => (c.surfaces.openai.frontier.effort = ''), /surfaces\.openai\.frontier\.effort must be an effort level/],
+    [(c) => (c.surfaces.openai.frontier.effort = 'xHigh'), /surfaces\.openai\.frontier\.effort must be an effort level/],
     [
       (c) => Object.assign(c.surfaces.anthropic.side, { effort: 'low', omit: ['thinking', 'output_config.effort'] }),
       /surfaces\.anthropic\.side sets effort and also omits it/,

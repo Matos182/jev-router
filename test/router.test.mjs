@@ -949,6 +949,11 @@ test("a target's effort lands in reasoning.effort on Responses, whether input is
   const s = await delta(() => post(url, '/v1/responses', text, headers));
   assert.deepEqual(s.openai[0].body.reasoning, { effort: 'high' }, 'a plain string input is still Responses');
   assert.equal(s.openai[0].body.output_config, undefined);
+  const bare = codexBody('t-effort', 'Design the migration');
+  delete bare.reasoning;
+  const b = await delta(() => post(url, '/v1/responses', bare, headers));
+  assert.deepEqual(b.openai[0].body.reasoning, { effort: 'high' }, 'a request without reasoning still gets it');
+  assert.equal(b.openai[0].body.output_config, undefined);
 });
 
 test("max_tokens is capped at the target model's output limit, and an upstream error's message is logged", async () => {
