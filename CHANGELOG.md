@@ -7,6 +7,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- A target's `effort` sets the reasoning effort its requests run at, over the request's own top-level setting:
+  `output_config.effort` on Messages, `reasoning.effort` on Responses, whether `input` is a list or a plain string.
+  It stays off count_tokens. Config validation refuses an effort that isn't a lowercase word, and a target that sets
+  `effort` while its `omit` list removes the same field.
+
 ## [1.6.0] - 2026-09-25
 
 Fable 5.1 can take Claude Code's hardest work now. Setup offers a third choice of models, Claude with Fable 5.1, which

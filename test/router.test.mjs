@@ -934,6 +934,23 @@ test("a target's effort replaces the client's, keeps its siblings, and stays off
   assert.deepEqual(other.anthropic[0].body.output_config, { effort: 'medium', format: 'text' }, 'other tiers pass it through');
 });
 
+test("a target's effort lands in reasoning.effort on Responses, whether input is a list or a plain string", async () => {
+  const cfg = testConfig();
+  const targets = cfg.surfaces.openai;
+  assert.ok(targets);
+  targets.frontier.effort = 'high';
+  const { url } = await startRouter({ cfg });
+  const headers = { ...codexHeaders('t-effort'), 'x-jev-tier': 'frontier' };
+  const list = { ...codexBody('t-effort', 'Design the migration'), reasoning: { effort: 'low', summary: 'auto' } };
+  const d = await delta(() => post(url, '/v1/responses', list, headers));
+  assert.deepEqual(d.openai[0].body.reasoning, { effort: 'high', summary: 'auto' });
+  assert.equal(d.openai[0].body.output_config, undefined);
+  const text = { ...codexBody('t-effort', 'Design the migration'), input: 'Design the migration', reasoning: { effort: 'low' } };
+  const s = await delta(() => post(url, '/v1/responses', text, headers));
+  assert.deepEqual(s.openai[0].body.reasoning, { effort: 'high' }, 'a plain string input is still Responses');
+  assert.equal(s.openai[0].body.output_config, undefined);
+});
+
 test("max_tokens is capped at the target model's output limit, and an upstream error's message is logged", async () => {
   // Claude Code sizes max_tokens for the model it thinks it talks to: 128000 for Opus 5.5.
   const { url, done } = await startRouter();

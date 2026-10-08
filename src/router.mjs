@@ -352,7 +352,7 @@ export function createRouter(
         ms: elapsed(startedAt),
       });
 
-    const outgoing = prepareBody(body, request.text, target, !countOnly && main ? entry?.anchor : undefined, countOnly);
+    const outgoing = prepareBody(body, request.text, target, surface, !countOnly && main ? entry?.anchor : undefined, countOnly);
     if (outgoing.redacted) shown['x-jev-redacted'] = String(outgoing.redacted);
     if (outgoing.capped) shown['x-jev-max-tokens'] = String(outgoing.capped);
     const status = await relay(req, res, { id, target, surface, session, shown, signal, startedAt, ...outgoing });
@@ -840,17 +840,18 @@ const rejectedBetas = (target) => target.omitBetas ?? REJECTED_BETAS.find(([patt
  * @param {RequestBody} body
  * @param {string} text the body as received, for a quick check for secrets
  * @param {Target} target
+ * @param {Surface} surface which API the body speaks, so the effort lands in its field
  * @param {string | undefined} anchor where the current provider took over the conversation
  * @param {boolean} [countOnly] a count_tokens request, which takes no effort
  * @returns {{ body: RequestBody, redacted: number, capped?: number, folded?: number }} `redacted` counts the secrets replaced
  */
-function prepareBody(body, text, target, anchor, countOnly = false) {
+function prepareBody(body, text, target, surface, anchor, countOnly = false) {
   let outgoing = anchor ? stripForeignReasoning(body, anchor) : body;
   let redacted = 0;
   if (!target.trusted && mayContainSecret(text)) ({ body: outgoing, count: redacted } = redactBody(outgoing));
   outgoing = omitFields({ ...outgoing, model: target.model }, target.omit);
   if (!target.trusted) delete outgoing.metadata;
-  if (target.effort && !countOnly) outgoing = withEffort(outgoing, target.effort);
+  if (target.effort && !countOnly) outgoing = withEffort(outgoing, target.effort, surface);
   const capped = capOutput(outgoing, outputLimit(target));
   const fold = target.foldSystemMessages ?? !NATIVE_SYSTEM_MESSAGES.test(target.model);
   const folded = fold ? foldSystemMessages(capped.body) : { body: capped.body };
@@ -882,13 +883,14 @@ function stripForeignReasoning(body, anchor) {
 
 /**
  * Sets the reasoning effort a target asks for, over whatever the client sent: `output_config.effort` on
- * Messages, `reasoning.effort` on Responses.
+ * Messages, `reasoning.effort` on Responses. The surface decides, since a Responses `input` may be a plain string.
  * @param {RequestBody} body
  * @param {string} effort
+ * @param {Surface} surface
  * @returns {RequestBody}
  */
-function withEffort(body, effort) {
-  if (Array.isArray(body.input)) return { ...body, reasoning: { ...(isRecord(body.reasoning) ? body.reasoning : {}), effort } };
+function withEffort(body, effort, surface) {
+  if (surface === 'openai') return { ...body, reasoning: { ...(isRecord(body.reasoning) ? body.reasoning : {}), effort } };
   return { ...body, output_config: { ...(isRecord(body.output_config) ? body.output_config : {}), effort } };
 }
 

@@ -39,7 +39,7 @@ export interface Target {
   /** Fields the upstream rejects, as dotted paths such as `output_config.effort`. */
   omit?: string[];
   /**
-   * The reasoning effort every request to this target runs at, over the client's own: `output_config.effort` on
+   * The reasoning effort every request to this target runs at, over the client's top-level setting: `output_config.effort` on
    * Messages, `reasoning.effort` on Responses. Not set on count_tokens.
    */
   effort?: string;

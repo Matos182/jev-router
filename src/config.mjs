@@ -3,6 +3,9 @@
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 
+// The fields a target's effort writes: omitting one of them as well would throw the effort away.
+const EFFORT_FIELDS = new Set(['output_config', 'output_config.effort', 'reasoning', 'reasoning.effort']);
+
 /** @import { Config, Env, JevChannel, JevConfig, Policy, Target } from './types.js' */
 
 /**
@@ -218,8 +221,12 @@ function checkTarget(target, where, need) {
     `${where}.omit must be a list of field paths`,
   );
   need(
-    target.effort === undefined || (typeof target.effort === 'string' && target.effort !== ''),
-    `${where}.effort must be an effort level`,
+    target.effort === undefined || (typeof target.effort === 'string' && /^[a-z]+$/.test(target.effort)),
+    `${where}.effort must be an effort level, such as "high"`,
+  );
+  need(
+    target.effort === undefined || !Array.isArray(target.omit) || !target.omit.some((f) => EFFORT_FIELDS.has(f)),
+    `${where} sets effort and also omits it`,
   );
   need(
     target.maxOutputTokens === undefined || (Number.isInteger(target.maxOutputTokens) && Number(target.maxOutputTokens) > 0),

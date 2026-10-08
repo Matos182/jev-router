@@ -299,7 +299,7 @@ Then, for every request, the router:
 1. **Redacts.** For an untrusted target it redacts secrets anywhere in the body, tool output included.
 1. **Drops unsupported fields.** It removes the fields the target lists in `omit`, for example the adaptive
    `thinking`, `output_config.effort` and `context_management` that Haiku 4.5 rejects.
-1. **Sets the effort.** A target with `effort` runs every request at that effort, whatever the client asked for.
+1. **Sets the effort.** A target with `effort` runs every request at that effort, over the client's top-level setting.
 1. **Caps the output.** It lowers `max_tokens` to what the target's model accepts. Claude Code asks for 128,000
    output tokens because it believes it talks to Opus 5.5, and Haiku 4.5 refuses anything above 64,000. The limits
    of the Claude models in the shipped configs are built in, and a target's `maxOutputTokens` overrides them.
