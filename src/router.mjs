@@ -68,7 +68,9 @@ const HOP = [
   'expect',
   'content-length',
 ];
-const DROP_REQUEST = new Set([...HOP, 'accept-encoding', 'authorization', 'x-api-key', 'x-jev-tier', 'x-jev-router-token']);
+// A client's login: it reaches a provider only through a trusted target with clientAuth and no router key.
+const CLIENT_LOGIN = ['authorization', 'x-api-key', 'chatgpt-account-id'];
+const DROP_REQUEST = new Set([...HOP, ...CLIENT_LOGIN, 'accept-encoding', 'x-jev-tier', 'x-jev-router-token']);
 const DROP_RESPONSE = new Set(['connection', 'keep-alive', 'transfer-encoding', 'content-length', 'content-encoding']);
 // What an upstream that isn't trusted with secrets (for example Ollama Cloud) receives. Claude Code's
 // session and agent ids and the account identifiers in `metadata` stay with the first-party provider.
@@ -1069,9 +1071,9 @@ function upstreamHeaders(req, target, env) {
   const key = target.keyEnv ? env[target.keyEnv] : undefined;
   if (key && target.auth === 'bearer') headers.authorization = `Bearer ${key}`;
   else if (key) headers['x-api-key'] = key;
-  else if (target.clientAuth) {
+  else if (target.clientAuth && target.trusted) {
     // no router key: pass the client's own login (for example claude.ai) to its provider only
-    for (const name of ['authorization', 'x-api-key']) if (req.headers[name]) headers[name] = req.headers[name];
+    for (const name of CLIENT_LOGIN) if (req.headers[name]) headers[name] = req.headers[name];
   }
   return headers;
 }

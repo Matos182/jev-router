@@ -538,6 +538,7 @@ test('config validation names each kind of problem', () => {
     [(c) => delete c.surfaces.openai.frontier.keyEnv, /surfaces\.openai\.frontier needs keyEnv or clientAuth/],
     [(c) => (c.surfaces.openai.frontier.stripPath = 'v1'), /surfaces\.openai\.frontier\.stripPath must be a path prefix/],
     [(c) => (c.surfaces.openai.frontier.stripPath = '/v1/'), /surfaces\.openai\.frontier\.stripPath must be a path prefix/],
+    [(c) => (c.surfaces.openai.frontier.stripPath = '/..'), /surfaces\.openai\.frontier\.stripPath must be a path prefix/],
     [(c) => (c.surfaces.anthropic.side.omit = 'thinking'), /surfaces\.anthropic\.side\.omit must be a list of field paths/],
     [(c) => (c.surfaces.anthropic.side.maxOutputTokens = 0), /surfaces\.anthropic\.side\.maxOutputTokens must be a positive whole number/],
     [(c) => (c.surfaces.anthropic.side.foldSystemMessages = 'yes'), /surfaces\.anthropic\.side\.foldSystemMessages must be true or false/],

@@ -291,6 +291,7 @@ test("a ChatGPT-login target gets the client's own login on a path with stripPat
     delete target.keyEnv;
     Object.assign(target, { url: `${openai.url}/backend-api/codex`, clientAuth: true, trusted: true, stripPath: '/v1' });
   }
+  validateConfig(cfg); // the documented recipe loads
   const { url } = await startRouter({ cfg });
   const login = { authorization: 'Bearer chatgpt-login', 'chatgpt-account-id': 'acct-1', 'x-jev-tier': 'frontier' };
   const body = codexBody('t-chatgpt', 'Design the zero-downtime migration for the orders table.');
@@ -307,6 +308,25 @@ test("a ChatGPT-login target gets the client's own login on a path with stripPat
   assert.equal(fast.headers.authorization, `Bearer ${KEYS.OLLAMA_API_KEY}`, 'an untrusted target never sees the login');
   assert.equal(fast.headers['chatgpt-account-id'], undefined);
   assert.equal(fast.url, '/v1/responses');
+});
+
+test('a client login reaches only a trusted clientAuth target without a router key', async () => {
+  reset(plans.a, { option: 'complex', probability: 0.9 });
+  const cfg = testConfig();
+  const fast = cfg.surfaces.openai?.fast;
+  assert.ok(fast && !fast.trusted);
+  delete fast.keyEnv;
+  fast.clientAuth = true;
+  const { url } = await startRouter({ cfg });
+  const login = { authorization: 'Bearer chatgpt-login', 'chatgpt-account-id': 'acct-1' };
+  const body = codexBody('t-login', 'Design the zero-downtime migration for the orders table.');
+  const untrusted = await delta(() => post(url, '/v1/responses', body, codexHeaders('t-login', { ...login, 'x-jev-tier': 'fast' })));
+  const up = untrusted.ollama[0];
+  assert.equal(up.headers.authorization, undefined, 'clientAuth without trusted never gets the login');
+  assert.equal(up.headers['chatgpt-account-id'], undefined);
+  const keyed = await delta(() => post(url, '/v1/responses', body, codexHeaders('t-login-2', { ...login, 'x-jev-tier': 'frontier' })));
+  assert.equal(keyed.openai[0].headers.authorization, `Bearer ${KEYS.OPENAI_API_KEY}`);
+  assert.equal(keyed.openai[0].headers['chatgpt-account-id'], undefined, 'a router key leaves the account header behind');
 });
 
 test('a session ratchets: tool loops never ask Jev, a harder new turn upgrades, an easier one keeps the tier', async () => {

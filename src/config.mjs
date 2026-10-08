@@ -214,7 +214,7 @@ function checkTarget(target, where, need) {
   need(AUTH.has(target.auth), `${where}.auth must be "x-api-key" or "bearer"`);
   need(target.keyEnv || target.clientAuth, `${where} needs keyEnv or clientAuth`);
   need(
-    target.stripPath === undefined || (typeof target.stripPath === 'string' && /^\/[\w.~-]+$/.test(target.stripPath)),
+    target.stripPath === undefined || (typeof target.stripPath === 'string' && /^\/(?!\.+$)[\w.~-]+$/.test(target.stripPath)),
     `${where}.stripPath must be a path prefix such as "/v1"`,
   );
   need(
