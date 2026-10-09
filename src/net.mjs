@@ -116,8 +116,32 @@ export function directFetch(url, init) {
   });
 }
 
-/** The content codings fetch decodes. */
-const DECODERS = { gzip: zlib.gunzipSync, 'x-gzip': zlib.gunzipSync, deflate: zlib.inflateSync, br: zlib.brotliDecompressSync };
+/**
+ * The content codings fetch decodes. Like fetch, deflate takes a zlib stream or raw deflate.
+ * @type {Record<string, (raw: Buffer) => Buffer>}
+ */
+const DECODERS = {
+  gzip: zlib.gunzipSync,
+  'x-gzip': zlib.gunzipSync,
+  deflate: (raw) => ((raw[0] & 0x0f) === 8 ? zlib.inflateSync(raw) : zlib.inflateRawSync(raw)),
+  br: zlib.brotliDecompressSync,
+};
+
+/**
+ * The decoder for a Content-Encoding list, undoing the last coding first, or undefined when the body
+ * is sent as is: no coding, or one fetch does not know, in which case fetch leaves it encoded too.
+ * @param {string | string[] | undefined} header
+ * @returns {((raw: Buffer) => Buffer) | undefined}
+ */
+function decoderFor(header) {
+  const codings = String(header ?? '')
+    .toLowerCase()
+    .split(',')
+    .map((coding) => coding.trim())
+    .filter(Boolean);
+  if (codings.length === 0 || !codings.every((coding) => Object.hasOwn(DECODERS, coding))) return undefined;
+  return (raw) => codings.reduceRight((body, coding) => DECODERS[coding](body), raw);
+}
 
 /**
  * The Response fetch would give for a raw reply: a gzip, deflate or br body decoded, and the
@@ -129,10 +153,7 @@ const DECODERS = { gzip: zlib.gunzipSync, 'x-gzip': zlib.gunzipSync, deflate: zl
  */
 function toResponse(res, raw) {
   const status = res.statusCode ?? 500;
-  const coding = String(res.headers['content-encoding'] ?? '')
-    .trim()
-    .toLowerCase();
-  const decode = Object.hasOwn(DECODERS, coding) ? DECODERS[/** @type {keyof typeof DECODERS} */ (coding)] : undefined;
+  const decode = decoderFor(res.headers['content-encoding']);
   /** @type {[string, string][]} */
   const pairs = [];
   for (const [name, value] of Object.entries(res.headers))

@@ -209,7 +209,7 @@ function liveChannels(jev, env) {
 /**
  * Questions for one call. A local channel only sends types Ollama documents, with each choice
  * criterion written out as the description string that API requires. An unsupported type fails
- * the decision, the same way a failed call does: the router keeps the default tier. Never throws.
+ * the channel, the same way a failed call does: the next channel decides. Never throws.
  * @param {JevQuestions} questions
  * @param {boolean} local
  * @returns {{ ok: true, questions: JevQuestions } | { ok: false, error: string }}
@@ -404,7 +404,7 @@ export class JevClient {
    */
   async #call(ch, state, timeoutMs, signal) {
     const prepared = prepareQuestions(buildQuestions(this.jev), ch.local);
-    // An unsupported question fails the decision. The router then keeps the default tier.
+    // An unsupported question fails this channel, and the next one decides.
     if (!prepared.ok) return { ok: false, error: prepared.error };
     const signals = [AbortSignal.timeout(timeoutMs), ...(signal ? [signal] : [])];
     let res;

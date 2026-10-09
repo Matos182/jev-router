@@ -910,12 +910,14 @@ test('a loopback server that sends a status fetch cannot represent, or a body th
   }
 });
 
-test('a loopback answer compressed with gzip, deflate or br is decoded, as the global fetch does', async () => {
+test('a loopback answer compressed with gzip, deflate (zlib or raw), br, or a list of them is decoded, as the global fetch does', async () => {
   const answer = JSON.stringify(jevOptionsAnswer({ option: 'routine', probability: 0.9 }));
   const codings = /** @type {const} */ ([
     ['gzip', zlib.gzipSync],
     ['deflate', zlib.deflateSync],
+    ['deflate', zlib.deflateRawSync],
     ['br', zlib.brotliCompressSync],
+    ['gzip, br', (/** @type {string} */ body) => zlib.brotliCompressSync(zlib.gzipSync(body))],
   ]);
   const queue = [...codings];
   const server = await mockServer((_call, res) => {
