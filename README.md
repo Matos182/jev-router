@@ -678,7 +678,7 @@ kit, and later the npm package. [docs/releasing.md](docs/releasing.md) has the s
 
 ## Status
 
-The current release is 1.6.0. The offline suite has 206 tests against mock upstreams and a mock Jev, and the package
+The current release is 1.6.0. The offline suite has 207 tests against mock upstreams and a mock Jev, and the package
 smoke test installs the packed package and runs it the way a user would.
 
 Live checks on 2026-09-24 ran Claude Code 2.1.281 through the router against Anthropic and found six problems, listed
