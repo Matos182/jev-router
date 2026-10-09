@@ -522,8 +522,11 @@ writes:
 ## Local decision model (Ollama)
 
 A channel can point at a decision model on this machine. [Ollama](https://ollama.com) 0.35 or newer serves
-`POST /v1/systemone`, the same call the router makes to Jev. Nothing leaves the machine, and there is no key and no
-per-token bill. Pull `nimble` (9B) or `tev1` (4B), start Ollama, and add a channel on a loopback address. Leave out
+`POST /v1/systemone`, the same call the router makes to Jev. That call stays on the machine, with no key and no
+per-token bill. The shipped hosted channels stay in the list, though: one whose key is set (`TYPESAFE_API_KEY`,
+`OPENROUTER_API_KEY`) decides whenever the channels before it do not answer. For decisions that never leave the
+machine, remove those channels or leave their keys unset. The model requests themselves still go to their
+upstreams. Pull `nimble` (9B) or `tev1` (4B), start Ollama, and add a channel on a loopback address. Leave out
 `keyEnv`:
 
 ```json
@@ -539,13 +542,15 @@ The router calls a loopback channel directly, never through `HTTP_PROXY`, so the
 
 The default budget, 1,200 ms per channel and 2,500 ms for the whole decision (`jev.deadlineMs`), fits a model that is
 already in memory. Loading one takes longer, and Ollama cancels a load when the caller hangs up, so a cold model may
-never finish loading inside it. Until it does, each decision fails and the session keeps `defaultTier`. Keep the model
+never finish loading inside it. Until it does, the channel fails and the next one decides; with no other channel, a new
+session gets `defaultTier` and an ongoing one keeps its tier. Keep the model
 loaded (`OLLAMA_KEEP_ALIVE=-1` on the Ollama server, then one call such as
 `curl http://127.0.0.1:11434/api/generate -d '{"model":"nimble"}'`), or raise the channel's `timeoutMs` and
 `jev.deadlineMs`.
 
 Ollama answers `choice` and `noul`, which are the questions the router asks, and `score`, which it does not. A question
-type the server does not support fails the decision the way a failed Jev call does: the session keeps `defaultTier`.
+type the server does not support fails the channel the way a failed Jev call does: the next channel decides, and when
+none answers, a new session gets `defaultTier` and an ongoing one keeps its tier.
 Ollama wants each choice option described by a string. For a local channel the router writes the rubric's `what`,
 `examples` and `not_for` into that string. TypeSafe and OpenRouter still get the structured criterion.
 
@@ -669,7 +674,7 @@ kit, and later the npm package. [docs/releasing.md](docs/releasing.md) has the s
 
 ## Status
 
-The current release is 1.6.0. The offline suite has 182 tests against mock upstreams and a mock Jev, and the package
+The current release is 1.6.0. The offline suite has 186 tests against mock upstreams and a mock Jev, and the package
 smoke test installs the packed package and runs it the way a user would.
 
 Live checks on 2026-09-24 ran Claude Code 2.1.281 through the router against Anthropic and found six problems, listed

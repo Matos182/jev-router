@@ -178,9 +178,10 @@ with `nimble` as the model unless `JEV_MODEL` is set. That `env` channel has no 
 [Ollama 0.35 or newer](https://docs.ollama.com/api/systemone) or another server with the same question types.
 
 Ollama accepts `choice`, `noul` and `score`. The router asks a `choice` (the tier) and two `noul` questions (sensitive
-state, routing claims). A type outside that set fails the decision the way a failed call does: the session gets
-`defaultTier`. Ollama also wants each choice criterion to be a description string. For a local channel the router
-writes the rubric's `what`, `examples` and `not_for` into that string. Hosted channels still receive the structured
+state, routing claims). A type outside that set fails the channel the way a failed call does: the next channel
+decides, and when none answers, a new session gets `defaultTier` and an ongoing one keeps its tier. Ollama also wants
+each choice criterion to be a description string. For a local channel the router writes the rubric's `what`,
+`examples` and `not_for` into that string. Hosted channels still receive the structured
 criterion. The model id in the answer is the one the server returns, or the channel's `model` when the body omits it.
 It is stored on the route log's `jev.model`.
 
