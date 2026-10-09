@@ -116,31 +116,39 @@ export function directFetch(url, init) {
   });
 }
 
+// fetch flushes rather than demanding a complete stream, so a truncated trailer still decodes.
+const ZLIB = { flush: zlib.constants.Z_SYNC_FLUSH, finishFlush: zlib.constants.Z_SYNC_FLUSH };
+const BROTLI = { flush: zlib.constants.BROTLI_OPERATION_FLUSH, finishFlush: zlib.constants.BROTLI_OPERATION_FLUSH };
+/** fetch refuses a reply with more codings than this. */
+const MAX_CODINGS = 5;
+
 /**
  * The content codings fetch decodes. Like fetch, deflate takes a zlib stream or raw deflate.
  * @type {Record<string, (raw: Buffer) => Buffer>}
  */
 const DECODERS = {
-  gzip: zlib.gunzipSync,
-  'x-gzip': zlib.gunzipSync,
-  deflate: (raw) => ((raw[0] & 0x0f) === 8 ? zlib.inflateSync(raw) : zlib.inflateRawSync(raw)),
-  br: zlib.brotliDecompressSync,
+  gzip: (raw) => zlib.gunzipSync(raw, ZLIB),
+  'x-gzip': (raw) => zlib.gunzipSync(raw, ZLIB),
+  deflate: (raw) => ((raw[0] & 0x0f) === 8 ? zlib.inflateSync(raw, ZLIB) : zlib.inflateRawSync(raw, ZLIB)),
+  br: (raw) => zlib.brotliDecompressSync(raw, BROTLI),
 };
 
 /**
  * The decoder for a Content-Encoding list, undoing the last coding first, or undefined when the body
- * is sent as is: no coding, or one fetch does not know, in which case fetch leaves it encoded too.
+ * is sent as is: no coding, or one fetch does not know (an empty entry included), in which case
+ * fetch leaves it encoded too. An empty body stays empty at every step, as a stream does.
  * @param {string | string[] | undefined} header
  * @returns {((raw: Buffer) => Buffer) | undefined}
  */
 function decoderFor(header) {
-  const codings = String(header ?? '')
+  if (!header) return undefined;
+  const codings = String(header)
     .toLowerCase()
     .split(',')
-    .map((coding) => coding.trim())
-    .filter(Boolean);
-  if (codings.length === 0 || !codings.every((coding) => Object.hasOwn(DECODERS, coding))) return undefined;
-  return (raw) => codings.reduceRight((body, coding) => DECODERS[coding](body), raw);
+    .map((coding) => coding.trim());
+  if (codings.length > MAX_CODINGS) throw new Error(`more than ${MAX_CODINGS} content codings`);
+  if (!codings.every((coding) => Object.hasOwn(DECODERS, coding))) return undefined;
+  return (raw) => codings.reduceRight((body, coding) => (body.length > 0 ? DECODERS[coding](body) : body), raw);
 }
 
 /**

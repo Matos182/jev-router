@@ -932,6 +932,42 @@ test('a loopback answer compressed with gzip, deflate (zlib or raw), br, or a li
   }
 });
 
+test('the direct fetch decodes the edge cases of Content-Encoding exactly as the global fetch does', async () => {
+  const body = '{"a":1}';
+  const gzip = (/** @type {Buffer | string} */ b) => zlib.gzipSync(b);
+  const full = gzip(body);
+  const nested = (/** @type {number} */ n) => Array.from({ length: n }).reduce((/** @type {Buffer} */ b) => gzip(b), Buffer.from(body));
+  /** @type {Array<[string, Buffer]>} */
+  const cases = [
+    ['deflate, gzip', gzip(Buffer.alloc(0))],
+    ['gzip,', full],
+    ['GZIP', full],
+    ['gzip', full.subarray(0, full.length - 4)],
+    ['gzip, zstd', full],
+    [Array(5).fill('gzip').join(', '), nested(5)],
+    [Array(6).fill('gzip').join(', '), nested(6)],
+  ];
+  let n = 0;
+  // Each case is asked twice, once by each fetch.
+  const server = await mockServer((_call, res) => {
+    const [coding, bytes] = cases[Math.floor(n++ / 2)];
+    res.writeHead(200, { 'content-encoding': coding }).end(bytes);
+  });
+  /** @param {() => Promise<Response>} get */
+  const read = (get) =>
+    get()
+      .then(async (res) => Buffer.from(await res.arrayBuffer()).toString('hex'))
+      .catch(() => 'rejected');
+  try {
+    for (const [coding] of cases) {
+      const expected = await read(() => fetch(server.url));
+      assert.equal(await read(() => directFetch(server.url, {})), expected, coding);
+    }
+  } finally {
+    await server.close();
+  }
+});
+
 test('the direct fetch refuses a URL with a user or password, as fetch does, and sends nothing', async () => {
   const server = await mockServer((_call, res) => json(res, 200, {}));
   try {
