@@ -39,6 +39,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   decides, and when none answers, a new session gets `defaultTier` and an ongoing one keeps its tier.
   `jev-router doctor` reports the local channel; `doctor --live` reports whether it answered.
 
+### Fixed
+
+- A channel's warm-up and circuit-breaker state is now kept per channel, not per name: two channels sharing a
+  name, such as a configured `env` and the keyless `JEV_BASE_URL` shortcut, no longer skip each other while one
+  loads a model or trips its breaker.
+
 ## [1.6.0] - 2026-09-25
 
 Fable 5.1 can take Claude Code's hardest work now. Setup offers a third choice of models, Claude with Fable 5.1, which

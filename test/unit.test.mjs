@@ -1062,6 +1062,20 @@ const localJev = (keepAlive = '10m') => ({
   channels: [{ name: 'local', baseUrl: 'http://localhost', model: 'nimble', timeoutMs: 20, keepAlive }, ...JEV.channels],
 });
 
+test('two channels sharing a name keep their own warm-up and breaker state', async (t) => {
+  // Same name as the keyless loopback channel, but a distinct, keyed, always-healthy one; no other
+  // channel targets 'one.invalid' here, so its one scripted reply is this sibling's alone.
+  const sibling = { name: 'local', baseUrl: 'http://one.invalid', model: 'jev-1.13.0', keyEnv: 'ONE_KEY', timeoutMs: 500 };
+  const jev = { ...localJev(), channels: [localJev().channels[0], sibling] };
+  const { client } = scripted({ localhost: [hang], 'one.invalid': [good] }, { jev });
+  t.after(() => client.close());
+  const warming = client.warm();
+  const result = await client.decide(stateOf('Add a test'));
+  assert.ok(result.ok && result.channel === 'local', 'the healthy namesake answers while the loopback channel warms');
+  client.close();
+  await warming;
+});
+
 test('a keyless loopback channel without keepAlive warms for 10m, and so does a keyless JEV_BASE_URL', async () => {
   let now = 1000;
   const jev = localJev();

@@ -335,14 +335,17 @@ export class JevClient {
     this.jev = jev;
     this.fetch = fetchImpl;
     this.now = now;
-    /** @type {Map<string, ChannelStats>} */
+    // Keyed by the channel object, not its name: two channels can share a display name (the
+    // keyless `env` shortcut and a configured one named `env`, say), and each needs its own
+    // warm-up and breaker state so one does not suppress the other.
+    /** @type {Map<LiveChannel, ChannelStats>} */
     this.stats = new Map();
-    /** @type {Map<string, { controller: AbortController, promise: Promise<void> }>} */
+    /** @type {Map<LiveChannel, { controller: AbortController, promise: Promise<void> }>} */
     this.warmups = new Map();
     this.closed = false;
     this.channels = liveChannels(jev, env);
     for (const ch of this.channels)
-      this.stats.set(ch.name, {
+      this.stats.set(ch, {
         calls: 0,
         errors: 0,
         lastError: null,
@@ -365,14 +368,14 @@ export class JevClient {
   /** @param {LiveChannel} ch @returns {Promise<void> | undefined} */
   #warm(ch) {
     if (this.closed || ch.keepAliveMs === undefined) return undefined;
-    const pending = this.warmups.get(ch.name);
+    const pending = this.warmups.get(ch);
     if (pending) return pending.promise;
     const controller = new AbortController();
-    const stat = /** @type {ChannelStats} */ (this.stats.get(ch.name));
+    const stat = /** @type {ChannelStats} */ (this.stats.get(ch));
     const recovering = stat.warmup === 'failed';
     stat.warmup = 'warming';
     const { promise, resolve } = Promise.withResolvers();
-    this.warmups.set(ch.name, { controller, promise });
+    this.warmups.set(ch, { controller, promise });
     void this.#load(ch, stat, controller, recovering).then(resolve);
     return promise;
   }
@@ -418,7 +421,7 @@ export class JevClient {
       }
     } finally {
       clearTimeout(timer);
-      this.warmups.delete(ch.name);
+      this.warmups.delete(ch);
     }
   }
 
@@ -432,7 +435,7 @@ export class JevClient {
     if (ch.keepAliveMs === undefined || stat.warmup === 'failed') return;
     const margin = Math.min(RESIDENCY_MARGIN_MS, ch.keepAliveMs / 10);
     ch.residentUntil = this.now() + ch.keepAliveMs - margin;
-    if (!this.warmups.has(ch.name)) stat.warmup = 'warm';
+    if (!this.warmups.has(ch)) stat.warmup = 'warm';
   }
 
   /** @param {LiveChannel} ch */
@@ -452,7 +455,7 @@ export class JevClient {
   health() {
     return Object.fromEntries(
       this.channels.map((ch) => {
-        const stat = /** @type {ChannelStats} */ (this.stats.get(ch.name));
+        const stat = /** @type {ChannelStats} */ (this.stats.get(ch));
         return [
           ch.name,
           {
@@ -496,7 +499,7 @@ export class JevClient {
    * @returns {Promise<JevAnswer | undefined>}
    */
   async #ask(ch, state, { started, deadline, signal, errors, warmOnTimeout }) {
-    const stat = /** @type {ChannelStats} */ (this.stats.get(ch.name)); // the constructor adds stats for every channel
+    const stat = /** @type {ChannelStats} */ (this.stats.get(ch)); // the constructor adds stats for every channel
     if (stat.warmup === 'warming') {
       errors.push(`${ch.name}: warming`);
       return undefined;
