@@ -1320,7 +1320,8 @@ test("a Jev answer is judged by the answering channel's thresholds, even when an
   const cfg = testConfig();
   // A configured channel named like the JEV_BASE_URL shortcut, with a threshold that would hide the sensitive turn.
   cfg.jev.channels[0] = { ...cfg.jev.channels[0], name: 'env', thresholds: { sensitiveOverride: 1 } };
-  const { url, routes } = await startRouter({ cfg, env: { JEV_BASE_URL: jevB.url } });
+  // A key keeps the shortcut out of the keyless warm-up, whose state is kept by channel name too.
+  const { url, routes } = await startRouter({ cfg, env: { JEV_BASE_URL: jevB.url, JEV_API_KEY: 'jev-test-key' } });
   reset(plans.b, { option: 'mechanical', probability: 1, sensitive: 0.8 });
   const d = await delta(() => post(url, '/v1/messages', cc('s-env-name', 'Drop the orders table'), ccHeaders('s-env-name')));
   assert.equal(d.jevB.length, 1, 'the shortcut answered');
