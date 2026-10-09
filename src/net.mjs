@@ -3,6 +3,7 @@
 import http from 'node:http';
 import https from 'node:https';
 import net from 'node:net';
+import zlib from 'node:zlib';
 import { hasControlCharacter } from './files.mjs';
 
 /** @import { Health } from './types.js' */
@@ -69,7 +70,8 @@ export const isLoopback = (host) => ['127.0.0.1', 'localhost', '::1'].includes(h
 /**
  * A fetch for loopback servers that never goes through a proxy. With NODE_USE_ENV_PROXY=1 the
  * global fetch sends every request to HTTP_PROXY unless NO_PROXY names the host, and a loopback
- * System One call carries the conversation's routing state. It reads the whole body, follows no
+ * System One call carries the conversation's routing state. It reads the whole body, decodes gzip,
+ * deflate and br as fetch does, refuses a URL with credentials, follows no
  * redirect, and rejects the way fetch does: with the signal's reason on abort, and with a
  * TypeError whose `cause` has the socket error otherwise.
  * @param {string} url
@@ -85,26 +87,60 @@ export function directFetch(url, init) {
       reject(signal.reason);
       return;
     }
+    // fetch refuses these too; http.request would turn them into an Authorization header.
+    if (target.username || target.password) {
+      reject(new TypeError('fetch failed', { cause: { code: 'URL_HAS_CREDENTIALS' } }));
+      return;
+    }
     const headers = /** @type {Record<string, string>} */ (init.headers ?? {});
     const req = client.request(target, { method: init.method ?? 'GET', headers, agent: false, signal }, (res) => {
       /** @type {Buffer[]} */
       const chunks = [];
       res.on('data', (chunk) => chunks.push(chunk));
       res.on('error', (err) => reject(signal?.aborted ? signal.reason : new TypeError('fetch failed', { cause: err })));
+      // A throw in here would escape the promise and stop the process, so every failure rejects.
       res.on('end', () => {
-        /** @type {[string, string][]} */
-        const pairs = [];
-        for (const [name, value] of Object.entries(res.headers))
-          if (value !== undefined) pairs.push([name, Array.isArray(value) ? value.join(', ') : value]);
-        const status = res.statusCode ?? 500;
-        // Response refuses a body on these statuses.
-        const body = [101, 204, 205, 304].includes(status) ? null : Buffer.concat(chunks);
-        resolve(new Response(body, { status, statusText: res.statusMessage, headers: pairs }));
+        try {
+          resolve(toResponse(res, Buffer.concat(chunks)));
+        } catch (err) {
+          reject(
+            new TypeError('fetch failed', {
+              cause: { code: `bad response (HTTP ${res.statusCode}): ${/** @type {Error} */ (err).message}` },
+            }),
+          );
+        }
       });
     });
     req.on('error', (err) => reject(signal?.aborted ? signal.reason : new TypeError('fetch failed', { cause: err })));
     req.end(typeof init.body === 'string' ? init.body : undefined);
   });
+}
+
+/** The content codings fetch decodes. */
+const DECODERS = { gzip: zlib.gunzipSync, 'x-gzip': zlib.gunzipSync, deflate: zlib.inflateSync, br: zlib.brotliDecompressSync };
+
+/**
+ * The Response fetch would give for a raw reply: a gzip, deflate or br body decoded, and the
+ * headers that describe the encoded bytes dropped. It throws on a status Response refuses
+ * (outside 200–599) and on a body that doesn't decode.
+ * @param {http.IncomingMessage} res
+ * @param {Buffer} raw
+ * @returns {Response}
+ */
+function toResponse(res, raw) {
+  const status = res.statusCode ?? 500;
+  const coding = String(res.headers['content-encoding'] ?? '')
+    .trim()
+    .toLowerCase();
+  const decode = Object.hasOwn(DECODERS, coding) ? DECODERS[/** @type {keyof typeof DECODERS} */ (coding)] : undefined;
+  /** @type {[string, string][]} */
+  const pairs = [];
+  for (const [name, value] of Object.entries(res.headers))
+    if (value !== undefined && !(decode && ['content-encoding', 'content-length'].includes(name)))
+      pairs.push([name, Array.isArray(value) ? value.join(', ') : value]);
+  // Response refuses a body on these statuses.
+  const body = [101, 204, 205, 304].includes(status) ? null : decode && raw.length > 0 ? decode(raw) : raw;
+  return new Response(body, { status, statusText: res.statusMessage, headers: pairs });
 }
 
 /**

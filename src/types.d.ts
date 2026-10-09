@@ -286,6 +286,8 @@ export interface PolicyInput {
 export interface JevSuccess extends PolicyInput {
   ok: true;
   channel: string;
+  /** The answering channel's own thresholds: channel names need not be unique. */
+  thresholds?: ChannelThresholds;
   model?: string;
   requestId?: string;
   ms: number;

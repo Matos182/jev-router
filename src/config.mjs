@@ -174,6 +174,9 @@ function checkJev(input, tiers, need) {
     need(typeof ch.model === 'string' && ch.model, `jev.channels[${i}].model is required`);
     // A loopback channel may omit its key. Any other host must name one, so a prompt is never sent unauthenticated.
     if (isLoopbackBaseUrl(ch.baseUrl)) {
+      // Node would send a user:password in the URL as Basic auth; fetch refuses it, and so does the router.
+      const { username, password } = new URL(String(ch.baseUrl));
+      need(!username && !password, `jev.channels[${i}].baseUrl must not carry a user or password`);
       if (ch.keyEnv !== undefined) need(typeof ch.keyEnv === 'string' && ch.keyEnv, `jev.channels[${i}].keyEnv must be a name when set`);
     } else need(typeof ch.keyEnv === 'string' && ch.keyEnv, keyEnvMessage(i));
     // Anything else fails every Jev call, before it is made.

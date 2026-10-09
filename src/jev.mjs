@@ -376,7 +376,8 @@ export class JevClient {
       if (remaining < 150 || signal?.aborted) break;
       stat.calls += 1;
       const result = withoutKey(await this.#call(ch, payloadState, Math.min(ch.timeoutMs, remaining), signal), ch.key);
-      if (result.ok) return { ...result, channel: ch.name, ms: Math.round(performance.now() - started), hardened };
+      if (result.ok)
+        return { ...result, channel: ch.name, thresholds: ch.thresholds, ms: Math.round(performance.now() - started), hardened };
       if (result.aborted) return { ok: false, aborted: true, error: 'client went away', ms: Math.round(performance.now() - started) };
       stat.errors += 1;
       stat.lastError = result.error;

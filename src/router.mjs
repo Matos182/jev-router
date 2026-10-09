@@ -623,12 +623,11 @@ function afterJevFailure(f, answer) {
 function afterJevAnswer(f, answer, options) {
   const { cfg, body, entry, turns } = f;
   const ongoing = f.fresh ? undefined : entry;
-  const channel = cfg.jev.channels.find((ch) => ch.name === answer.channel);
   const decision = applyPolicy({
     answer,
     tiers: cfg.tiers,
     options,
-    policy: policyFor(cfg.policy, channel?.thresholds),
+    policy: policyFor(cfg.policy, answer.thresholds),
     reference: ongoing ? ongoing.tier : cfg.defaultTier,
     current: ongoing?.tier,
   });

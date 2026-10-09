@@ -22,6 +22,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - `jev.channels[].thresholds` overrides `policy.accept`, `policy.sensitiveOverride` and `policy.claimGuard` for that
   channel. The packaged policy stays a starting point for Jev. It is not a calibration for nimble or tev1, and a field
   left unset falls back to it on purpose.
+  A decision is judged by the thresholds of the channel that answered it, so two channels with the same name, such as
+  a configured `env` and the `JEV_BASE_URL` shortcut, never borrow each other's.
+- The direct call to a loopback channel behaves like fetch: it decodes a gzip, deflate or br body, and a status fetch
+  cannot represent (outside 200 to 599) or a body that does not decode fails that channel instead of stopping the
+  router. A loopback `baseUrl` with a user or password in it is refused when the config loads, since the request would
+  carry them as Basic auth.
 - For a local channel, choice criteria are written out as the description strings Ollama requires. A question type
   outside Ollama's `choice`, `noul` and `score` fails the decision the way a failed Jev call does, and the session
   keeps `defaultTier`. `jev-router doctor` reports the local channel; `doctor --live` reports whether it answered.

@@ -24,6 +24,7 @@ import { homedir, tmpdir } from 'node:os';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
 import { parseEnv, promisify } from 'node:util';
+import zlib from 'node:zlib';
 import { changeSettingsEnv, readSettings, settingsBlock, settingsSet } from '../src/claude.mjs';
 import { loadConfig, validateConfig } from '../src/config.mjs';
 import { envFileFor, loadEnvFile, quoteEnvValue, setEnvValues } from '../src/envfile.mjs';
@@ -41,7 +42,7 @@ import {
 } from '../src/jev.mjs';
 import { appendLogLine } from '../src/logfile.mjs';
 import { clip, describeCode, harness, header, humanTurns, recentTools, stripWrappers, tierTag } from '../src/messages.mjs';
-import { parseUiAddress, portProblem } from '../src/net.mjs';
+import { directFetch, parseUiAddress, portProblem } from '../src/net.mjs';
 import { PromptAbort, Prompter, typeKeys } from '../src/prompt.mjs';
 import { report, requestKind, sessionKey, VERSION } from '../src/router.mjs';
 import { findSecrets, mayContainSecret, redactBody, scrub } from '../src/secrets.mjs';
@@ -540,6 +541,10 @@ test('config validation names each kind of problem', () => {
     [(c) => (c.jev.channels = [{ name: 'x', baseUrl: 'https://jev.example' }]), /jev\.channels\[0\]\.model is required/],
     [(c) => (c.jev.channels = [{ name: 'x', baseUrl: 'https://jev.example', model: 'm' }]), /jev\.channels\[0\]\.keyEnv is required/],
     [(c) => (c.jev.channels = [{ name: 'x', baseUrl: 'http://10.1.2.3:11434', model: 'nimble' }]), /only allowed on a loopback address/],
+    [
+      (c) => (c.jev.channels = [{ name: 'x', baseUrl: 'http://alice:example@127.0.0.1:11434', model: 'nimble' }]),
+      /baseUrl must not carry a user or password/,
+    ],
     [(c) => (c.jev.channels[0].thresholds = { accept: { turbo: 0.5 } }), /thresholds\.accept names unknown tier "turbo"/],
     [(c) => (c.jev.channels[0].thresholds = { sensitiveOverride: 2 }), /thresholds\.sensitiveOverride must be a probability/],
     [(c) => (c.jev.question = ''), /jev\.question is required/],
@@ -882,6 +887,66 @@ test('a loopback Jev call skips HTTP_PROXY under NODE_USE_ENV_PROXY, which the g
   }
 });
 
+test('a loopback server that sends a status fetch cannot represent, or a body that does not decode, fails the decision instead of the router', {
+  timeout: 10000,
+}, async () => {
+  const answer = JSON.stringify(jevOptionsAnswer({ option: 'routine', probability: 0.9 }));
+  /** @type {Array<(res: import('node:http').ServerResponse) => void>} */
+  const replies = [
+    (res) => res.writeHead(600, { 'content-type': 'application/json' }).end(answer),
+    (res) => res.writeHead(200, { 'content-type': 'application/json', 'content-encoding': 'gzip' }).end('not gzip at all'),
+  ];
+  const server = await mockServer((_call, res) => replies.shift()?.(res));
+  try {
+    // A failed channel is skipped for 30 seconds, so each reply gets a fresh client.
+    const client = () =>
+      new JevClient({ ...JEV, channels: [{ name: 'ollama', baseUrl: server.url, model: 'nimble', timeoutMs: 1000 }] }, {});
+    const first = await client().decide(stateOf('Add a test'));
+    assert.ok(!first.ok && first.error.includes('HTTP 600'), 'the status is named');
+    const second = await client().decide(stateOf('Add a test'));
+    assert.ok(!second.ok && /HTTP 200/.test(second.error), 'a body that does not decode is an error too');
+  } finally {
+    await server.close();
+  }
+});
+
+test('a loopback answer compressed with gzip, deflate or br is decoded, as the global fetch does', async () => {
+  const answer = JSON.stringify(jevOptionsAnswer({ option: 'routine', probability: 0.9 }));
+  const codings = /** @type {const} */ ([
+    ['gzip', zlib.gzipSync],
+    ['deflate', zlib.deflateSync],
+    ['br', zlib.brotliCompressSync],
+  ]);
+  const queue = [...codings];
+  const server = await mockServer((_call, res) => {
+    const [coding, encode] = /** @type {(typeof codings)[number]} */ (queue.shift());
+    res.writeHead(200, { 'content-type': 'application/json', 'content-encoding': coding }).end(encode(answer));
+  });
+  try {
+    const client = new JevClient({ ...JEV, channels: [{ name: 'ollama', baseUrl: server.url, model: 'nimble', timeoutMs: 1000 }] }, {});
+    for (const [coding] of codings) assert.equal((await client.decide(stateOf('Add a test'))).ok, true, coding);
+  } finally {
+    await server.close();
+  }
+});
+
+test('the direct fetch refuses a URL with a user or password, as fetch does, and sends nothing', async () => {
+  const server = await mockServer((_call, res) => json(res, 200, {}));
+  try {
+    const url = new URL(server.url);
+    url.username = 'alice';
+    url.password = 'example';
+    await assert.rejects(
+      directFetch(url.href, { method: 'POST', body: '{}' }),
+      (err) => err instanceof TypeError && err.message === 'fetch failed',
+    );
+    await assert.rejects(fetch(url.href, { method: 'POST', body: '{}' }), TypeError);
+    assert.equal(server.calls.length, 0);
+  } finally {
+    await server.close();
+  }
+});
+
 test('a channel threshold overrides the policy for that model only', () => {
   const thresholds = { accept: { fast: 0.99 }, sensitiveOverride: 0.95, claimGuard: 0.9 };
   const tuned = policyFor(cfg.policy, thresholds);
@@ -932,7 +997,7 @@ test('an unsupported question type fails open, the same way a failed Jev call do
   const answer = await client.decide(stateOf('Add a test'));
   assert.equal(answer.ok, false);
   assert.ok(!answer.ok && answer.error.includes('type must be choice, noul, or score'));
-  assert.equal(calls.length, 1, 'a 400 is not retried; the router then uses the default tier');
+  assert.equal(calls.length, 1, 'a 400 is not retried; the next channel, or the fallback, decides');
   assert.equal(client.health().ollama.open, false);
 });
 

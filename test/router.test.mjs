@@ -1315,3 +1315,17 @@ test('logs carry decisions but never keys or prompt text', () => {
   for (const prompt of ['zero-downtime migration', 'intermittently', AWS_KEY])
     assert.ok(!text.includes(prompt), `prompt text leaked: ${prompt}`);
 });
+
+test("a Jev answer is judged by the answering channel's thresholds, even when another channel shares its name", async () => {
+  const cfg = testConfig();
+  // A configured channel named like the JEV_BASE_URL shortcut, with a threshold that would hide the sensitive turn.
+  cfg.jev.channels[0] = { ...cfg.jev.channels[0], name: 'env', thresholds: { sensitiveOverride: 1 } };
+  const { url, routes } = await startRouter({ cfg, env: { JEV_BASE_URL: jevB.url } });
+  reset(plans.b, { option: 'mechanical', probability: 1, sensitive: 0.8 });
+  const d = await delta(() => post(url, '/v1/messages', cc('s-env-name', 'Drop the orders table'), ccHeaders('s-env-name')));
+  assert.equal(d.jevB.length, 1, 'the shortcut answered');
+  assert.equal(d.jevA.length, 0);
+  const [route] = routes();
+  assert.ok(route.jev?.ok && route.jev.channel === 'env', 'the shortcut is the channel named in the log');
+  assert.equal(d.result.headers.get('x-jev-tier'), 'frontier', 'the global sensitiveOverride (0.7) applies, not the other channel');
+});
